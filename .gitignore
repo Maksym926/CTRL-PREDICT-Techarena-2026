@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Competition data and outputs (never commit)
+data/*
+!data/.gitkeep
+submissions/*
+!submissions/.gitkeep
+.venv/
