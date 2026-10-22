@@ -225,3 +225,4 @@ data/*
 submissions/*
 !submissions/.gitkeep
 .venv/
+logs/
