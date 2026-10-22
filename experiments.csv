@@ -1,2 +1,2 @@
 id,date,author,change,local_auc,lb_auc,notes
-001,2026-10-22,Maksym,starter solution (unmodified),,,"baseline; runtime 2.7 min; LB score to be filled after upload"
+001,2026-10-22,Maksym,starter solution (unmodified),,0.619958,"baseline; runtime 2.7 min; 5455 preds saturated at 1.0"
