@@ -226,3 +226,4 @@ submissions/*
 !submissions/.gitkeep
 .venv/
 logs/
+.idea/
