@@ -23,7 +23,7 @@ import torch
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import leakfree_safe_v2 as lf  # noqa: E402  (sets cwd to the repo root and loads Monish's package)
-from src.choice_mf import click_svd, code_maps, encode, predict, train  # noqa: E402
+from src.choice_mf import click_pairs, click_svd, code_maps, encode, predict, strip_time, train  # noqa: E402
 from src.data import load_candidates, load_events  # noqa: E402
 from src.validation import make_split  # noqa: E402
 
@@ -36,7 +36,8 @@ BASELINE = 0.791945
 
 def cmf_features(frame: pd.DataFrame, boundary: int, events: pl.DataFrame, cands: pl.DataFrame,
                  umap: dict, imap: dict, cache: Path = CMF_CACHE, target_events: pl.DataFrame | None = None,
-                 target_cands: pl.DataFrame | None = None) -> pd.DataFrame:
+                 target_cands: pl.DataFrame | None = None, args: SimpleNamespace = CMF_ARGS,
+                 epochs: int = CMF_EPOCHS) -> pd.DataFrame:
     """Attach choice-MF features to `frame`, using a model trained only on train events before `boundary`.
     The frame's rows are looked up in target_events/target_cands (default: the train tables)."""
     target_events = events if target_events is None else target_events
@@ -50,7 +51,11 @@ def cmf_features(frame: pd.DataFrame, boundary: int, events: pl.DataFrame, cands
         target_ids = pl.DataFrame({"rowid": rowids}).join(target_cands, on="rowid").select("event_id")
         target = encode(target_events.join(target_ids.unique(), on="event_id", how="semi"), target_cands, umap, imap)
         fit = encode(events.filter(pl.col("timestamp") < boundary), cands, umap, imap)
-        model, _ = train(fit, len(umap), len(imap), CMF_ARGS, CMF_EPOCHS, click_svd(boundary, umap, imap, 11))
+        if getattr(args, "no_time", 0):
+            fit, target = strip_time(fit), strip_time(target)
+        clicks = click_pairs(boundary, umap, imap) if getattr(args, "aux_weight", 0) > 0 else None
+        model, _ = train(fit, len(umap), len(imap), args, epochs, click_svd(boundary, umap, imap, args.svd_rank),
+                         clicks=clicks)
         p = predict(model, target).reshape(-1, 10)
         feats = pd.DataFrame({"rowid": target["rowid"].reshape(-1), "cmf_prob": p.reshape(-1),
                               "cmf_noclick": np.repeat(1.0 - p.sum(1), 10),

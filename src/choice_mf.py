@@ -166,12 +166,15 @@ class ChoiceMF(nn.Module):
         self.user0.copy_(self.user.weight.detach())
         self.item0.copy_(self.item.weight.detach())
 
-    def forward(self, user, cand, hist, rep, noclick):
+    def user_vector(self, user, hist):
+        """Taste vector: weighted history items (+ the free per-user vector when enabled)."""
         mask = hist != self.pad
         w = torch.softmax(self.slot_weight.expand_as(hist).masked_fill(~mask, -1e9), dim=1) * mask
         user_vec = (w.unsqueeze(-1) * self.context(hist)).sum(1)
-        if self.user_emb:
-            user_vec = user_vec + self.user(user)
+        return user_vec + self.user(user) if self.user_emb else user_vec
+
+    def forward(self, user, cand, hist, rep, noclick):
+        user_vec = self.user_vector(user, hist)
         item_vec = self.item(cand)
         util = (item_vec * user_vec.unsqueeze(1)).sum(-1) + self.item_bias(cand).squeeze(-1) + self.rep(rep).squeeze(-1)
         no_click = self.noclick(noclick).squeeze(-1) + self.user_noclick(user).squeeze(-1)
@@ -206,6 +209,18 @@ def predict(model: ChoiceMF, d: dict, batch: int = 8192) -> np.ndarray:
             logits, _ = model(*(t[s:s + batch] for t in x))
             out.append(torch.softmax(logits, 1)[:, 1:].numpy())
     return np.concatenate(out).reshape(-1)
+
+
+def taste_vectors(model: ChoiceMF, d: dict, batch: int = 8192) -> tuple[np.ndarray, np.ndarray]:
+    """User taste vector per event (n, dim) and candidate item vectors (n, 10, dim) of a trained model."""
+    model.eval()
+    user, cand, hist, _, _ = tensors(d)
+    users, items = [], []
+    with torch.no_grad():
+        for s in range(0, len(d["user"]), batch):
+            users.append(model.user_vector(user[s:s + batch], hist[s:s + batch]).numpy())
+            items.append(model.item(cand[s:s + batch]).numpy())
+    return np.concatenate(users), np.concatenate(items)
 
 
 def holdout_auc(model: ChoiceMF, holdout: dict) -> float:
