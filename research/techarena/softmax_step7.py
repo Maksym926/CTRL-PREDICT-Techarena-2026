@@ -33,6 +33,8 @@ ap.add_argument("--threads", type=int, default=-1)
 ap.add_argument("--tag", default="", help="suffix for the output names")
 ap.add_argument("--swap", nargs="*", default=[], help="prefix=folder: the folder under cache/ (cmf_seeds.py --merge, "
                                                       "<boundary>.parquet) replaces the <prefix>_prob/_noclick/_rank columns")
+ap.add_argument("--params", default="", help="JSON with best_params (e.g. outputs/optuna_step4.json) on top of the "
+                                             "default LightGBM parameters the partner has always used")
 A = ap.parse_args()
 sys.argv = [sys.argv[0], "--threads", str(A.threads)]  # softmax_objective parses the command line on import
 HERE = Path(__file__).resolve().parent
@@ -41,6 +43,8 @@ import softmax_objective as so  # noqa: E402
 from src.validation import make_split  # noqa: E402
 
 lf = so.lf
+if A.params:  # so.fit and submit() both read lf.LGB_PARAMS
+    lf.LGB_PARAMS.update(json.loads(Path(A.params).read_text())["best_params"])
 LAB = HERE / "cache" / "lab"
 SEQ_DIR = HERE / "cache" / "seq" / A.seq
 NEW = ["seq50_prob", "seq50_noclick", "seq50_rank"]
@@ -118,7 +122,7 @@ def validate() -> None:
         d = d.merge(q.assign(rowid=q["rowid"].astype(str)).rename(columns={"predicted_probability": name}), on="rowid")
     assert len(d) == len(va), "validation rows lost in the merges"
     y = d["clicked"].to_numpy(np.float64)
-    res = {"seq": A.seq, "binary": A.binary, "trees": int(n_trees),
+    res = {"seq": A.seq, "binary": A.binary, "trees": int(n_trees), "params": A.params,
            "softmax7_alone": so.decompose(y, d["soft7"].to_numpy()),
            "binary_alone": so.decompose(y, d["binary"].to_numpy()),
            "blend_binary_old_partner": so.decompose(y, 0.5 * (rank(d["binary"].to_numpy()) + rank(d["soft_old"].to_numpy()))),

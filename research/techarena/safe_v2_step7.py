@@ -41,9 +41,11 @@ ap.add_argument("--tree-mult", type=float, default=1.0, help="scale the inner-ho
 ap.add_argument("--share-feats", action="store_true", help="add the sequence models' within-event log-shares and their "
                                                             "50- minus 20-click difference as columns")
 ap.add_argument("--n-seeds", type=int, default=0, help="average this many LightGBM seeds instead of the usual 3")
+ap.add_argument("--params", default="", help="JSON with best_params to use instead of outputs/optuna_step4.json "
+                                             "(e.g. outputs/optuna_step7.json)")
 ARGS = ap.parse_args()
 if (ARGS.seq != "stage3_h50" or ARGS.extra or ARGS.swap or ARGS.lgb or ARGS.max_trees or ARGS.tree_mult != 1.0
-        or ARGS.share_feats or ARGS.n_seeds) and not ARGS.tag:
+        or ARGS.share_feats or ARGS.n_seeds or ARGS.params) and not ARGS.tag:
     raise SystemExit("another --seq, --extra, --swap, --lgb, --max-trees, --tree-mult, --share-feats or --n-seeds needs "
                      "a --tag, or step 7's own outputs would be overwritten")
 sys.argv = sys.argv[:1]
@@ -54,6 +56,8 @@ from src.data import load_events  # noqa: E402
 from src.validation import make_split  # noqa: E402
 
 lf.LGB_PARAMS.update(json.loads((HERE / "outputs" / "optuna_step4.json").read_text())["best_params"])  # as step 5
+if ARGS.params:
+    lf.LGB_PARAMS.update(json.loads(Path(ARGS.params).read_text())["best_params"])
 for kv in ARGS.lgb:
     key, value = kv.split("=", 1)
     lf.LGB_PARAMS[key] = json.loads(value)
@@ -144,7 +148,7 @@ def validate() -> None:
     order = sorted(cols, key=lambda c: -imp[c])
     results = {**res, "trees": n_trees, "delta_vs_step5": gain, "decision": decision,
                "lgb_overrides": ARGS.lgb, "max_trees": lf.MAX_TREES, "share_feats": ARGS.share_feats,
-               "lgb_seeds": list(lf.FULL_SEEDS),
+               "lgb_seeds": list(lf.FULL_SEEDS), "params_file": ARGS.params,
                "new_feature_ranks": {c: order.index(c) + 1 for c in NEW if c in cols},
                "top_features_by_gain": [(c, round(float(imp[c]))) for c in order[:15]],
                "minutes": round((time.perf_counter() - t0) / 60, 1)}
