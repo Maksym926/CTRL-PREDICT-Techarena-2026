@@ -2,7 +2,8 @@
 ("which") part refitted as a conditional logit that also uses the raw sequence models' within-event shares.
 
     whether = W log E_binary + (1 - W) log E_softmax      (E = sum of the event's 10 predictions; W = 0.1)
-    which   = sum_k beta_k log share_k,  k in {binary, softmax, 50-click sequence model, 20-click sequence model}
+    u       = sum_k beta_k log share_k,  k in {binary, softmax, 50-click sequence model, 20-click sequence model}
+    which   = u - logsumexp over the event's 10 candidates of u   (renormalised: a proper within-event log-share)
     score   = whether + c * which
 
 beta: softmax over each clicked validation event's 10 candidates. c (which-vs-whether scale) is picked on global AUC.
@@ -43,16 +44,18 @@ ap.add_argument("--sub-b")
 ap.add_argument("--seq50", default="stage3_h50_s30", help="folder under cache/seq with the 50-click features")
 ap.add_argument("--seq20", default="stage3_s5", help="folder under cache/seq with the 20-click features")
 ap.add_argument("--w-whether", type=float, default=0.1)
+ap.add_argument("--val-c", help="optional which-only model (raw scores, e.g. rank_step7.py), validation predictions")
+ap.add_argument("--sub-c", help="the same model's submission file")
 ap.add_argument("--out")
 ARGS = ap.parse_args()
 SEQ = HERE / "cache" / "seq"
-KEYS = ["a", "b", "s50", "s20"]
+KEYS = ["a", "b", "s50", "s20"] + (["c"] if ARGS.val_c else [])
 
 
-def frame(rows: pd.DataFrame, a_path: str, b_path: str, seq_name: str) -> pd.DataFrame:
-    """rows (rowid, event_id, ...) + a, b, s50, s20, sorted by event so that every 10 rows form one event."""
+def frame(rows: pd.DataFrame, a_path: str, b_path: str, seq_name: str, c_path: str | None = None) -> pd.DataFrame:
+    """rows (rowid, event_id, ...) + a, b, s50, s20 (and c), sorted by event so that every 10 rows form one event."""
     d = rows.assign(rowid=rows["rowid"].astype(str))
-    for name, path in (("a", a_path), ("b", b_path)):
+    for name, path in (("a", a_path), ("b", b_path)) + ((("c", c_path),) if c_path else ()):
         p = pd.read_parquet(path) if path.endswith(".parquet") else pd.read_csv(path)
         d = d.merge(p.assign(rowid=p["rowid"].astype(str)).rename(columns={"predicted_probability": name}), on="rowid")
     for name, folder in (("s50", ARGS.seq50), ("s20", ARGS.seq20)):
@@ -69,11 +72,24 @@ def parts(d: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """whether (per row) and the stacked log-shares (rows x components)."""
     logs, mass = [], {}
     for k in KEYS:
+        if k == "c":  # raw scores: within-event log-softmax
+            v = d[k].to_numpy(float).reshape(-1, 10)
+            v = v - v.max(1, keepdims=True)
+            logs.append((v - np.log(np.exp(v).sum(1, keepdims=True))).ravel())
+            continue
         v = np.clip(d[k].to_numpy(float), EPS, 1 - EPS).reshape(-1, 10)
         mass[k] = v.sum(1, keepdims=True)
         logs.append(np.log(v / mass[k]).ravel())
     whether = (ARGS.w_whether * np.log(mass["a"]) + (1 - ARGS.w_whether) * np.log(mass["b"])).repeat(10, 1).ravel()
     return whether, np.stack(logs, -1)
+
+
+def renorm(u: np.ndarray) -> np.ndarray:
+    """Within-event log-softmax: without it the combination's event-level offset is arbitrary and moves whole events
+    against each other in the global AUC (held out on package C: +0.00003 over the unnormalised version)."""
+    u = u.reshape(-1, 10)
+    m = u.max(1, keepdims=True)
+    return (u - m - np.log(np.exp(u - m).sum(1, keepdims=True))).ravel()
 
 
 def fit_beta(Z: np.ndarray, y: np.ndarray, ev_mask: np.ndarray) -> np.ndarray:
@@ -89,14 +105,14 @@ def fit_beta(Z: np.ndarray, y: np.ndarray, ev_mask: np.ndarray) -> np.ndarray:
         val = -(u[np.arange(len(t)), t] - lse).sum()
         grad = -(z[np.arange(len(t)), t] - (p[:, :, None] * z).sum(1)).sum(0)
         return val, grad
-    return minimize(nll, np.array([0.7, 0.3, 0.0, 0.0]), jac=True, method="L-BFGS-B").x
+    return minimize(nll, np.r_[0.7, 0.3, np.zeros(Z.shape[1] - 2)], jac=True, method="L-BFGS-B").x
 
 
 def main() -> None:
     sp = make_split(4)
     rows = sp.val_candidates.select("rowid", "event_id", "clicked").to_pandas().merge(
         sp.val_events.select("event_id", "user_id").to_pandas(), on="event_id")
-    v = frame(rows, ARGS.val_a, ARGS.val_b, f"b{sp.cutoff_ts}")
+    v = frame(rows, ARGS.val_a, ARGS.val_b, f"b{sp.cutoff_ts}", ARGS.val_c)
     y = v["clicked"].to_numpy()
     whether, Z = parts(v)
     clicked = y.reshape(-1, 10).max(1) == 1
@@ -111,27 +127,27 @@ def main() -> None:
     report = {"rank_50_50": roc_auc_score(y, rank_blend), "factorised": roc_auc_score(y, whether + plain), "halves": []}
     for h in (True, False):
         beta = fit_beta(Z, y, clicked & (half == h))
-        which = Z @ beta
+        which = renorm(Z @ beta)
         c = max(SCALES, key=lambda s: auc(whether + s * which, half == h))
         report["halves"].append({"beta": beta.round(4).tolist(), "scale": c,
                                  "held_out": auc(whether + c * which, half != h),
                                  "held_out_factorised": auc(whether + plain, half != h)})
     gains = [r["held_out"] - r["held_out_factorised"] for r in report["halves"]]
     beta = fit_beta(Z, y, clicked)
-    which = Z @ beta
+    which = renorm(Z @ beta)
     c = max(SCALES, key=lambda s: auc(whether + s * which, np.ones(len(clicked), bool)))
     if min(gains) <= 0:
         print("held-out gain not positive on both halves: using the plain factorised blend")
-        beta, c = np.array([0.7, 0.3, 0.0, 0.0]), 1.0
+        beta, c = np.r_[0.7, 0.3, np.zeros(len(KEYS) - 2)], 1.0
     report.update({"held_out_gains": gains, "beta": beta.round(4).tolist(), "scale": c,
-                   "final_on_validation": roc_auc_score(y, whether + c * (Z @ beta))})
+                   "final_on_validation": roc_auc_score(y, whether + c * renorm(Z @ beta))})
     print(json.dumps(report, indent=1))
     if not ARGS.out:
         return
     ev = load_candidates("eval").select("rowid", "event_id").to_pandas()
-    s = frame(ev, ARGS.sub_a, ARGS.sub_b, "full_eval")
+    s = frame(ev, ARGS.sub_a, ARGS.sub_b, "full_eval", ARGS.sub_c)
     w_s, Z_s = parts(s)
-    score = w_s + c * (Z_s @ beta)
+    score = w_s + c * renorm(Z_s @ beta)
     r = pd.Series(score).rank() / len(score)
     pd.DataFrame({"rowid": s["rowid"], "predicted_probability": r.to_numpy()}).to_csv(ARGS.out, index=False)
     rho = np.corrcoef(r, (s["a"].rank() + s["b"].rank()).to_numpy())[0, 1]
