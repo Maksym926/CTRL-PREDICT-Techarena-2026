@@ -420,3 +420,40 @@ seed takes ~5 min there on CPU. No `cache/lab` frames there, so LightGBM steps r
 
 **Still untested ideas (small or speculative):** "user's mean past rank" feature (per-user predictability); a Bayesian /
 posterior-sampling taste model; EM with soft labels on evaluation slates. The challenge FAQ/forum (user only) is unchecked.
+
+## 15. 3–4 Nov night: blending, more hypotheses, the second PC as a LightGBM machine
+The user went to bed at 22:00 asking to keep testing ideas and to commit/push overnight (uploads stay theirs).
+
+**Blending (free, no retraining; scripts `blend_csv.py --factorised`, `final_blend.py`).** Package C's two models
+differ: the softmax partner has the better event click mass ("whether" AUC 0.668 vs 0.662), the binary model the better
+within-event shares ("which" 0.7957 vs 0.7954). All numbers on validation, held-out = fitted on one user half, scored on
+the other:
+
+| Blend of C's binary + softmax files | Validation | Held-out gain |
+|---|---|---|
+| 50/50 rank blend (package C) | 0.807766 | — |
+| factorised: whether 0.1/0.9, which 0.7/0.3 (same weights picked on both halves) | 0.807890 | +0.00011 / +0.00013 |
+| + which part as a conditional logit with the raw 50-click (30 seeds) and 20-click (5 seeds) sequence shares | 0.808107 (in-sample) | +0.00014 / +0.00025 over factorised |
+| + h100 / big / right sequence variants as more components | — | +0.00003 / +0.00006 (left out) |
+
+The logit weights (binary 0.56, softmax 0.31, 50-click +0.20, 20-click −0.12, scale 0.95) say the stack under-uses
+what the older clicks add. File: `submissions/safe_v2_step7_s30_final_c.csv` (checked valid; ≈ C + 0.0003).
+
+**Hypotheses tested tonight (all negative or tiny):**
+
+| Idea | Result |
+|---|---|
+| Users drawn from a limited set of taste archetypes (would let 2–3 clicks pin a light user's taste) | No: heavy users' two half-histories find each other first 62.5% of the time (Gaussian null 65.1%); k-means inertia vs the null falls smoothly 0.97 → 0.92 (K 10 → 500), no elbow |
+| Dedicated event-level "whether" model (LightGBM on event features, 2-fold by user) | 0.661 vs the softmax partner's 0.668; mixed in +0.00006 |
+| Raw sequence model better than the stack for some group (known clicks × repeat/new) | No group: the stack wins everywhere; new-item which-AUC 0.650 (0–2 clicks), 0.725, 0.761, 0.782, 0.798, 0.803 (21–30), 0.817 (31–40), 0.810 (41–60): flat above 30 clicks, so heavy users are limited by the item side / generator noise |
+| Taste score relative to the user's other history items, for real re-clicks vs history fillers | Plain taste 0.627, relative versions 0.61–0.62; added to the stack 0.6825 → 0.6827 (nothing) |
+| Full-catalogue model rejected unfairly? | No: `fullmf_model.py` already scores log p − log q (filler correction) |
+| More distinct LightGBM targets (`learning_curve.json`) | +0.0006 per doubling; "every event as a target" ≈ +0.0012 but needs per-event features for every component and ~3× the memory: not feasible before the deadline |
+
+**Second PC as a LightGBM machine.** Tailscale now connects directly (~1.8 MB/s instead of 0.3), so the validation
+frames (`cache/lab/step6_*`, 1.4 GB) were copied there in 13 min. Its commit headroom (~24 GB) allows one validation
+run at a time, not a submission build. Queue (`D:\HuaweiTechArena\lgb_exp.bat`, summary `logs\lgb_exp.log` there),
+step 7 with the 30-seed features (this PC's reference 0.807295): `share` (`--share-feats`: the sequence models'
+within-event log-shares and their 50 − 20 difference), `lr015` (learning rate 0.015), `tm12` (trees × 1.2), `nl31`
+(31 leaves, min 400), `cs06` (column sample 0.6), `base` (reproducibility check). New `safe_v2_step7.py` options:
+`--lgb key=value`, `--max-trees`, `--tree-mult`, `--share-feats`.
