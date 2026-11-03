@@ -1,6 +1,6 @@
 # Tech Arena 2026, Phase 1: full handoff (everything we tried)
 
-> **New session: read this file first.** Last updated 3 Nov 2026, 14:10. It replaces `HANDOFF.md` (27 Oct) and
+> **New session: read this file first.** Last updated 3 Nov 2026, 14:30 (LB 0.821624 recorded). It replaces `HANDOFF.md` (27 Oct) and
 > `PROGRESS.md`. Results JSONs: `research/techarena/outputs/`; logs: `logs/` (`logs/overnight.log` = the 2–3 Nov
 > chronology).
 
@@ -9,14 +9,14 @@
 | | |
 |---|---|
 | Deadline | **Phase 1 closes 4 Nov 2026, midnight** |
-| Our best leaderboard (LB) score | **0.819061** (experiment 004, 26 Oct) |
+| Our best leaderboard (LB) score | **0.821624** (experiment 005, 3 Nov: `safe_v2_step7_blend.csv`); previous 0.819061 (004) |
 | Top of the leaderboard | 0.834673 (3 Nov). On 26 Oct: top 0.8329, 5 teams ≥ 0.8318, 34 teams > 0.82, so a widely known "0.83 signal" exists that we have not found |
-| **Best validated model** | **step 7 + softmax blend, local 0.807134** → `submissions/safe_v2_step7_blend.csv`, expected LB ≈ 0.822 |
-| Local → LB gap | +0.0149 to +0.0176 over 3 submissions (LB ≈ local + 0.015) |
-| To reach LB 0.83 | local ≈ 0.815, i.e. **+0.008 over the current best** |
+| **Best validated model** | **step 7 + softmax blend, local 0.807134** → `submissions/safe_v2_step7_blend.csv`, **LB 0.821624** |
+| Local → LB gap | +0.0145 to +0.0176 over 4 submissions (latest +0.0145; ~86% of the last local gain carried over) |
+| To reach LB 0.83 | +0.0084 on the LB, i.e. local ≈ 0.8155 (+0.0084 over the current best) |
 
 **Pending:**
-- Upload `safe_v2_step7_blend.csv`. Record LB scores in `experiments.csv` (rows 005+; see §11).
+- `experiments.csv` row 005 added (LB 0.821624). Add a row for every further upload.
 - Commit the code (§11).
 - Optional: run Kaggle `seq_h50_more.ipynb` (§12).
 
@@ -161,7 +161,7 @@
 | `safe_v2_step5_softmax.csv` | (alone 0.806305) | softmax-objective model, 2498 trees × 3 seeds |
 | `safe_v2_step5_blend.csv` | 0.806868 | step 5 + softmax |
 | `safe_v2_step7.csv` | 0.806901 | + 50-click sequence features |
-| **`safe_v2_step7_blend.csv`** | **0.807134** | **step 7 + softmax: upload** |
+| **`safe_v2_step7_blend.csv`** | **0.807134** | **= 005, LB 0.821624** |
 
 - Runtimes on this machine (alone):
   - step 5: validation 96 min, `--submit` 142 min; step 7 (saved frames): validation 35 min, `--submit` 65 min;
@@ -183,7 +183,7 @@
 | — | + small wins (slate, trends, transitions, EASE) | 0.806163 | — |
 | — | Step 5: + choice model with filler-matched auxiliary negatives | 0.806442 | — |
 | — | Step 7: + sequence model fed up to 50 known clicks (Kaggle, 5 seeds) | 0.806901 | — |
-| — | **Step 7 + softmax-objective model, 50/50 rank blend** | **0.807134** | **to upload** |
+| 005 | **Step 7 + softmax-objective model, 50/50 rank blend** | **0.807134** | **0.821624** |
 
 ### What helped (all small)
 | Idea | Effect |
@@ -257,17 +257,17 @@ git commit -m "Stage 3 seq features, small wins, step 5 and the 50-click sequenc
 ```
 
 ```bash
-git add research/techarena/safe_v2_step6.py research/techarena/safe_v2_step7.py research/techarena/softmax_objective.py research/techarena/softmax_blend_val.py research/techarena/lab_ensemble.py research/techarena/lab_submit.py research/techarena/blend_csv.py research/techarena/merge_seq_dirs.py research/techarena/WHAT_WE_TRIED.md HANDOFF.md
+git add research/techarena/safe_v2_step6.py research/techarena/safe_v2_step7.py research/techarena/softmax_objective.py research/techarena/softmax_blend_val.py research/techarena/lab_ensemble.py research/techarena/lab_submit.py research/techarena/blend_csv.py research/techarena/merge_seq_dirs.py research/techarena/WHAT_WE_TRIED.md HANDOFF.md experiments.csv
 ```
 
 ```bash
-git commit -m "Step 7 + softmax blend (local 0.807134), labs and full handoff" -m "- safe_v2_step7.py: step 5 + 50-click sequence features from saved frames, 0.806901; 50/50 rank blend with the softmax-objective model 0.807134
+git commit -m "Step 7 + softmax blend: LB 0.821624 (local 0.807134), labs and full handoff" -m "- safe_v2_step7.py: step 5 + 50-click sequence features from saved frames, 0.806901; 50/50 rank blend with the softmax-objective model 0.807134, LB 0.821624 (experiments.csv row 005)
 - safe_v2_step6.py (no gain), softmax_objective.py, softmax_blend_val.py, lab_ensemble.py, lab_submit.py, blend_csv.py, merge_seq_dirs.py
 - WHAT_WE_TRIED.md: full handoff (results, protocol, code map, next steps)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- `experiments.csv` has rows 001–004. Add one row per upload once the LB score is known, for example:
-  `005,2026-11-03,Maksym,"step 7 (+ 50-click sequence features) blended 50/50 with the softmax-objective model",0.807134,<LB>,"submissions/safe_v2_step7_blend.csv; step7 alone 0.806901; softmax 2498 trees x 3 seeds"`
+- `experiments.csv` has rows 001–005 (005 = step 7 blend, LB 0.821624). Add one row per further upload, for example:
+  `006,<date>,Maksym,"<change>",<local>,<LB>,"<file; notes>"`
   (and a row for the 1-seed stage 3 file if it was uploaded: local 0.805031).
 
 ## 12. Next steps toward 0.83 (by value)
