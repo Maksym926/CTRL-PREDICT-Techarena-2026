@@ -1,7 +1,13 @@
 # Tech Arena 2026, Phase 1: full handoff (everything we tried)
 
-> **New session: read this file first.** Last updated 3 Nov 2026, 21:50 (§0 overnight jobs, §13–§14: 3 Nov tests).
+> **New session: read this file first.** Last updated 3 Nov 2026, 22:50 (§0 overnight jobs, §13–§15: 3 Nov tests).
 > It replaces `HANDOFF.md` (27 Oct) and `PROGRESS.md`. Results JSONs: `research/techarena/outputs/`; logs: `logs/`.
+
+**Update 3 Nov 22:50 — best file to upload now: `submissions/safe_v2_step7_s30_final_c.csv`** (package C's two models
+with the new final blend, `final_blend.py`: validation 0.808133, held-out estimate ≈ 0.80811, i.e. ≈ C + 0.00035;
+checked valid). Overnight (see §15): package D (queue below) gets the same final blend automatically
+(`queues/queue_d_final.sh` → `submissions/safe_v2_step7_d_final.csv` if D is built); the second PC runs LightGBM
+experiments on the validation frames (`D:\HuaweiTechArena\lgb_exp.bat`, summary `logs\lgb_exp.log` there).
 
 ## 0. Where we are (3 Nov, 21:50)
 
