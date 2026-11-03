@@ -33,9 +33,13 @@ ap.add_argument("--extra", default="", help="another folder under cache/seq whos
                                             "columns, e.g. fullmf_model.py's fmf_*) are merged in as well")
 ap.add_argument("--swap", nargs="*", default=[], help="prefix=folder: the folder under cache/ (cmf_seeds.py --merge, "
                                                       "<boundary>.parquet) replaces the <prefix>_prob/_noclick/_rank columns")
+ap.add_argument("--lgb", nargs="*", default=[], help="key=value LightGBM overrides on top of the Optuna parameters, "
+                                                     "e.g. learning_rate=0.015 num_leaves=31")
+ap.add_argument("--max-trees", type=int, default=0, help="cap of the inner-holdout tree search (default 2500)")
 ARGS = ap.parse_args()
-if (ARGS.seq != "stage3_h50" or ARGS.extra or ARGS.swap) and not ARGS.tag:
-    raise SystemExit("another --seq, --extra or --swap needs a --tag, or step 7's own outputs would be overwritten")
+if (ARGS.seq != "stage3_h50" or ARGS.extra or ARGS.swap or ARGS.lgb or ARGS.max_trees) and not ARGS.tag:
+    raise SystemExit("another --seq, --extra, --swap, --lgb or --max-trees needs a --tag, or step 7's own outputs "
+                     "would be overwritten")
 sys.argv = sys.argv[:1]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -44,6 +48,11 @@ from src.data import load_events  # noqa: E402
 from src.validation import make_split  # noqa: E402
 
 lf.LGB_PARAMS.update(json.loads((HERE / "outputs" / "optuna_step4.json").read_text())["best_params"])  # as step 5
+for kv in ARGS.lgb:
+    key, value = kv.split("=", 1)
+    lf.LGB_PARAMS[key] = json.loads(value)
+if ARGS.max_trees:
+    lf.MAX_TREES = ARGS.max_trees
 LAB = HERE / "cache" / "lab"
 SEQ_DIR = HERE / "cache" / "seq" / ARGS.seq
 NAME = "safe_v2_step5_from_frames" if ARGS.baseline else "safe_v2_step7" + ARGS.tag
@@ -115,6 +124,7 @@ def validate() -> None:
     imp = dict(zip(cols, m.booster_.feature_importance(importance_type="gain")))
     order = sorted(cols, key=lambda c: -imp[c])
     results = {**res, "trees": n_trees, "delta_vs_step5": gain, "decision": decision,
+               "lgb_overrides": ARGS.lgb, "max_trees": lf.MAX_TREES,
                "new_feature_ranks": {c: order.index(c) + 1 for c in NEW if c in cols},
                "top_features_by_gain": [(c, round(float(imp[c]))) for c in order[:15]],
                "minutes": round((time.perf_counter() - t0) / 60, 1)}
