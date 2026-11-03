@@ -3,11 +3,11 @@
 > **New session: read this file first.** Last updated 3 Nov 2026, 22:50 (§0 overnight jobs, §13–§15: 3 Nov tests).
 > It replaces `HANDOFF.md` (27 Oct) and `PROGRESS.md`. Results JSONs: `research/techarena/outputs/`; logs: `logs/`.
 
-**Update 3 Nov 22:50 — best file to upload now: `submissions/safe_v2_step7_s30_final_c.csv`** (package C's two models
+**Update 3 Nov 23:55 — best file to upload now: `submissions/safe_v2_step7_s30_final_c.csv`** (package C's two models
 with the new final blend, `final_blend.py`: validation 0.808133, held-out estimate ≈ 0.80811, i.e. ≈ C + 0.00035;
-checked valid). Overnight (see §15): package D (queue below) gets the same final blend automatically
-(`queues/queue_d_final.sh` → `submissions/safe_v2_step7_d_final.csv` if D is built); the second PC runs LightGBM
-experiments on the validation frames (`D:\HuaweiTechArena\lgb_exp.bat`, summary `logs\lgb_exp.log` there).
+checked valid). Package D was validated and stopped (no gain, §15). The second PC runs LightGBM experiments on the
+validation frames (`D:\HuaweiTechArena\lgb_exp.bat`, then `lgb_exp2.bat` = Optuna re-tune; summary `logs\lgb_exp.log`
+there); this PC tests the softmax partner with tuned parameters.
 
 ## 0. Where we are (3 Nov, 21:50)
 
@@ -463,3 +463,10 @@ step 7 with the 30-seed features (this PC's reference 0.807295): `share` (`--sha
 within-event log-shares and their 50 − 20 difference), `lr015` (learning rate 0.015), `tm12` (trees × 1.2), `nl31`
 (31 leaves, min 400), `cs06` (column sample 0.6), `base` (reproducibility check). New `safe_v2_step7.py` options:
 `--lgb key=value`, `--max-trees`, `--tree-mult`, `--share-feats`.
+
+**Package D (choice-model seed averaging, 3 Nov 23:47): STOP.** cmf (v2) 5 seeds, cmf12 10, cmf16 5, cmfp 5 averaged
+and swapped into step 7 s30: binary 0.807352 (C's 0.807295, +0.00006), softmax partner 0.807197 (C's 0.807347,
+−0.00015, one seed so noisy), 50/50 rank blend 0.807727 vs C 0.807766 → not built. The stack already absorbs the
+choice models' seed noise (as with the width ensemble). The averaged folders stay in `cache/choicemf_*_avg`.
+Second PC checks: the `base` run reproduces this PC's 0.807295 exactly (and runs ~2.2× faster: ~11 min per
+validation); `--share-feats` 0.807325 (+0.00003, not used).
