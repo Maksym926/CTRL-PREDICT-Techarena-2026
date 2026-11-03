@@ -38,11 +38,13 @@ ap.add_argument("--lgb", nargs="*", default=[], help="key=value LightGBM overrid
 ap.add_argument("--max-trees", type=int, default=0, help="cap of the inner-holdout tree search (default 2500)")
 ap.add_argument("--tree-mult", type=float, default=1.0, help="scale the inner-holdout tree count for the full fit "
                                                              "(which has one more window of data)")
+ap.add_argument("--share-feats", action="store_true", help="add the sequence models' within-event log-shares and their "
+                                                            "50- minus 20-click difference as columns")
 ARGS = ap.parse_args()
-if (ARGS.seq != "stage3_h50" or ARGS.extra or ARGS.swap or ARGS.lgb or ARGS.max_trees or ARGS.tree_mult != 1.0) \
-        and not ARGS.tag:
-    raise SystemExit("another --seq, --extra, --swap, --lgb, --max-trees or --tree-mult needs a --tag, or step 7's "
-                     "own outputs would be overwritten")
+if (ARGS.seq != "stage3_h50" or ARGS.extra or ARGS.swap or ARGS.lgb or ARGS.max_trees or ARGS.tree_mult != 1.0
+        or ARGS.share_feats) and not ARGS.tag:
+    raise SystemExit("another --seq, --extra, --swap, --lgb, --max-trees, --tree-mult or --share-feats needs a --tag, "
+                     "or step 7's own outputs would be overwritten")
 sys.argv = sys.argv[:1]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -94,7 +96,18 @@ def add_seq50(frame: pd.DataFrame, name: str) -> pd.DataFrame:
         out = out.drop(columns=cols).merge(x, on="rowid", how="left")
         if len(out) != len(frame) or out[cols].isna().any().any():
             raise SystemExit(f"{folder}/{b}: rows without the replacement {prefix} features")
-    return out
+    return add_shares(out) if ARGS.share_feats else out
+
+
+def add_shares(f: pd.DataFrame) -> pd.DataFrame:
+    """--share-feats (one window or target frame at a time): each sequence model's log-share within the event and the
+    50- minus 20-click difference, which only carries information for users with more than 20 known clicks."""
+    new = {}
+    for c in ("seq50_prob", "seq_prob"):
+        v = f[c].clip(lower=1e-7)
+        new[f"{c}_lshare"] = np.log(v / v.groupby(f["event_index"], sort=False).transform("sum"))
+    new["seq50_minus_seq20"] = new["seq50_prob_lshare"] - new["seq_prob_lshare"]
+    return f.assign(**new)
 
 
 def with_seq50(train: pd.DataFrame, bounds: list[int], target: pd.DataFrame, target_name: str):
@@ -127,7 +140,7 @@ def validate() -> None:
     imp = dict(zip(cols, m.booster_.feature_importance(importance_type="gain")))
     order = sorted(cols, key=lambda c: -imp[c])
     results = {**res, "trees": n_trees, "delta_vs_step5": gain, "decision": decision,
-               "lgb_overrides": ARGS.lgb, "max_trees": lf.MAX_TREES,
+               "lgb_overrides": ARGS.lgb, "max_trees": lf.MAX_TREES, "share_feats": ARGS.share_feats,
                "new_feature_ranks": {c: order.index(c) + 1 for c in NEW if c in cols},
                "top_features_by_gain": [(c, round(float(imp[c]))) for c in order[:15]],
                "minutes": round((time.perf_counter() - t0) / 60, 1)}
