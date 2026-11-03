@@ -1,26 +1,44 @@
 # Tech Arena 2026, Phase 1: full handoff (everything we tried)
 
-> **New session: read this file first.** Last updated 3 Nov 2026, 17:20 (§13: the afternoon's tests). It replaces `HANDOFF.md` (27 Oct) and
-> `PROGRESS.md`. Results JSONs: `research/techarena/outputs/`; logs: `logs/` (`logs/overnight.log` = the 2–3 Nov
-> chronology).
+> **New session: read this file first.** Last updated 3 Nov 2026, 21:50 (§0 overnight jobs, §13–§14: 3 Nov tests).
+> It replaces `HANDOFF.md` (27 Oct) and `PROGRESS.md`. Results JSONs: `research/techarena/outputs/`; logs: `logs/`.
 
-## 0. Where we are
+## 0. Where we are (3 Nov, 21:50)
 
 | | |
 |---|---|
 | Deadline | **Phase 1 closes 4 Nov 2026, midnight** |
 | Our best leaderboard (LB) score | **0.821624** (experiment 005, 3 Nov: `safe_v2_step7_blend.csv`); previous 0.819061 (004) |
-| Top of the leaderboard | 0.834673 (3 Nov). On 26 Oct: top 0.8329, 5 teams ≥ 0.8318, 34 teams > 0.82, so a widely known "0.83 signal" exists that we have not found |
-| **Best validated model** | **step 7 + softmax blend, local 0.807134** → `submissions/safe_v2_step7_blend.csv`, **LB 0.821624** |
-| Local → LB gap | +0.0145 to +0.0176 over 4 submissions (latest +0.0145; ~86% of the last local gain carried over) |
-| To reach LB 0.83 | +0.0084 on the LB, i.e. local ≈ 0.8155 (+0.0084 over the current best) |
+| Top of the leaderboard | 0.834673 (3 Nov). On 26 Oct: top 0.8329, 5 teams ≥ 0.8318, 34 teams > 0.82 |
+| **Best built file (not uploaded yet)** | **package C, local 0.807766** (+0.00063 vs 005) → `submissions/safe_v2_step7_s30_blend_c.csv` (checked valid); expected LB ≈ 0.8222 |
+| Local → LB gap | +0.0145 to +0.0176 over 5 submissions (~86% of the last local gain carried over) |
+| To reach LB 0.83 | local ≈ 0.817 (+0.0098 over C). Every model-side idea now gives ≤ +0.0005 (§13–§14) |
 
-**Pending (3 Nov evening):**
-- Building `submissions/safe_v2_step7_softmax.csv` (new softmax partner with the 50-click features); blend with
-  `safe_v2_step7.csv` = local 0.807361 (+0.00023 vs 005).
-- Step 7 with the 30-seed sequence features (`cache/seq/stage3_h50_s30`, `--tag _s30`), then its submission if its
-  blend with the new partner reaches 0.807461 (§13). Queue log: `logs/queue_b.log`.
-- Commit the 3 Nov afternoon code (§13). Add an `experiments.csv` row for every upload.
+**Packages (local AUC):** A `safe_v2_step7_blend2.csv` 0.807361 · B `safe_v2_step7_s30_blend.csv` 0.807593 ·
+**C `safe_v2_step7_s30_blend_c.csv` 0.807766** (step 7 with 30-seed sequence features + softmax partner retrained on
+them) · D (overnight, below). The user had not uploaded A/B/C at 21:50 (wanted ≥ 0.83 first); recommendation: upload
+the best of C/D anyway. Every upload gets an `experiments.csv` row.
+
+**Overnight jobs 3–4 Nov (running, all restart-safe; scripts copied to `research/techarena/queues/`):**
+1. **Second PC** (`ssh yulia@100.103.24.101`, see the memory note / §14): one SSH chain runs `cmf_seeds.py` for cmf12
+   seeds 3–9, cmf16 seeds 1–4, cmf (v2) seeds 1–4 (≈5 min per seed there), then partial averages
+   `cache/choicemf_{d12,d16,v2}_part` (`--no-base`). Log there: `logs\cmf_chain.log`. Seeds 1–2 of cmf12 were done
+   first (`logs\cmf_d12_s1.log`, `_s2.log`). At 21:45 cmf12 seed 8 was running.
+2. **This PC, `queues/queue_d_transfer.sh`**: waits for `choicemf_v2_part\seeds.json` on the second PC, copies the
+   three `_part` folders here by scp, then touches `logs/queue_d_transfer.done`.
+3. **This PC, `queues/queue_d.sh`** (log `logs/queue_d.log`): cmfp seeds 1–4 here → merge all four features with seed 0
+   (`cache/choicemf_*_avg`) → `safe_v2_step7.py --seq stage3_h50_s30 --swap cmf=choicemf_v2_avg cmf12=choicemf_d12_avg
+   cmf16=choicemf_d16_avg cmfp=choicemf_pop_avg --tag _d` (validation) → `softmax_step7.py` with the same swaps →
+   `blend_val.py` → **builds package D only if the blend ≥ 0.807866** (C + 0.0001) →
+   `submissions/safe_v2_step7_d_blend.csv`, then "queue finished". Expected D: local 0.8079–0.8082, LB ≈ 0.8223–0.8225.
+- **To check:** `tail logs/queue_d.log`; second PC: `ssh ... "type D:\HuaweiTechArena\CTRL-PREDICT-Techarena-2026\logs\cmf_chain.log"`.
+- **Second PC and git:** it runs an untracked scp copy of `research\techarena\cmf_seeds.py` (same content as the
+  committed one). Once its chain is finished, delete that file there before `git pull`, or the pull refuses.
+- **If a job died** (e.g. the session closed): re-run the same `cmf_seeds.py --model M --seed S` (finished boundaries
+  skip), then `bash research/techarena/queues/queue_d_transfer.sh` and `bash research/techarena/queues/queue_d.sh`
+  (they wait for their inputs; queue_d skips nothing, so delete partial outputs of an interrupted step first).
+  Windows: TaskStop/killing a Git Bash script can leave its python children running — check `Get-CimInstance
+  Win32_Process` command lines before restarting, and never edit a running bash script.
 
 ---
 
@@ -367,3 +385,38 @@ every known click; compared on validation "which item" AUC with the choice model
 `make_kaggle_notebook.py` (`kaggle/seq_aug.ipynb`, `seq_pair_a/b/c.ipynb`), `seq_inner_report.py` (compare variants
 on the inner holdout), `softmax_step7.py`, `blend_val.py` (rank-blend AUC from saved validation predictions),
 `safe_v2_step7.py --tag`, `merge_seq_dirs.py` (seed counts of single runs), `src/choice_mf.py --history/--threads`.
+
+## 14. 3 Nov evening: more tests, the second PC, overnight seeds
+**Full-catalogue MF on Kaggle** (`fullmf_model.py`, `kaggle/fullmf.ipynb`, SVD start + softmax over all 50,000 items,
+3 seeds, ~45 min on T4): inner holdout 0.78327 (SVD start) → 0.79241 at epoch 3 (+0.0091); validation-boundary
+which-AUC 0.770 (choice model 0.781, sequence model 0.789 on the same events). Both pre-set rules failed → not stacked.
+
+**Leak / mechanism tests, all negative** (probe scripts in the session scratchpad):
+
+| Test | Finding |
+|---|---|
+| Click rate by stored slate position; re-click real vs filler by position | Flat (0.0625–0.0632; 0.395–0.409) |
+| Duplicate items within a slate | None |
+| rowid / event_id as plain md5/sha of event, item, position, user+time | No matches |
+| Timestamps | All minute-aligned; `time_bucket` = hour bins 0–5/6–11/12–17/18–23, `day_type` = days 5–6, no mismatches; event rate 1:2:3:4 across buckets (click rate flat); a click's history timestamp = its event's; eval events not clipped at the cutoff |
+| Our errors (new items) | Real item top-1 in 31.6%, ranks 7–10 in 9.8% (those: taste match below the fillers', light users, median 9 distinct clicks); real item = most-shown candidate 10.5%, highest-CTR 10.8% (≈ chance): no popularity-click mechanism |
+| History-filler mechanism | Odds(real) ∝ times the item is in the history (1 : 1.95 : 3.0): real re-clicks are drawn per history entry, fillers per distinct item. Already a feature (`history_count`) |
+| Per-user predictability | Early vs late real-item rank, within known-click bins: corr +0.030 (cmf12) / +0.037 (seq), null 0 ± 0.007: real but weak (feature not built; worth ~+0.0001) |
+| Slate reuse | No eval rows/events in train, no identical slates anywhere; 0.42% of eval candidates were in the user's last train slate (72% of those clicked there = re-click candidates, already features) |
+| Other team's file | A global rank transform (values uniform in (0,1), event sums 5.0); their top pick = ours in 81.2% of events, our #2 in 14.0%; no confident-event pattern |
+
+**Choice-model seed averaging** (`cmf_seeds.py`): each stack choice feature came from one seed. A seed refits the exact
+original configuration (`safe_v2_choicemf.cmf_features`, only `args.seed` differs) at the 14 boundaries; targets are
+each user's first event from the boundary (superset of both scopes), so one run serves validation and submission.
+Merge self-test (seed 0 with itself) reproduced the cache exactly. Settings: v2 = step 1's CMF2 (11 dims, 2 epochs),
+d12 / d16 = 12 / 16 dims, pop = step 5's filler-matched config (3 epochs). `safe_v2_step7.py` / `softmax_step7.py
+--swap prefix=folder` replace the `<prefix>_prob/_noclick/_rank` columns.
+
+**Second PC** (details in the memory note `techarena-second-pc`): Yulia-PC, `D:\HuaweiTechArena\CTRL-PREDICT-Techarena-2026`,
+branch `monish`; Python 3.14.10 venv = this PC's lock file + torch 2.14.1+cu126 (GTX 1660 SUPER, CUDA works);
+`data\parquet` verified; 12 cores, 31.9 GB RAM, commit limit 38.9 GB; git through a read-only deploy key (HTTPS + Git
+Credential Manager cannot work over SSH). SSH copies run ~0.3 MB/s (use Google Drive for big files); a choice-model
+seed takes ~5 min there on CPU. No `cache/lab` frames there, so LightGBM steps run on this PC only.
+
+**Still untested ideas (small or speculative):** "user's mean past rank" feature (per-user predictability); a Bayesian /
+posterior-sampling taste model; EM with soft labels on evaluation slates. The challenge FAQ/forum (user only) is unchecked.

@@ -31,6 +31,8 @@ ap.add_argument("--binary", default="data/validation/safe_v2_step7_val_c4.parque
 ap.add_argument("--submit", action="store_true")
 ap.add_argument("--threads", type=int, default=-1)
 ap.add_argument("--tag", default="", help="suffix for the output names")
+ap.add_argument("--swap", nargs="*", default=[], help="prefix=folder: the folder under cache/ (cmf_seeds.py --merge, "
+                                                      "<boundary>.parquet) replaces the <prefix>_prob/_noclick/_rank columns")
 A = ap.parse_args()
 sys.argv = [sys.argv[0], "--threads", str(A.threads)]  # softmax_objective parses the command line on import
 HERE = Path(__file__).resolve().parent
@@ -52,6 +54,15 @@ def add_seq50(frame: pd.DataFrame, name: str) -> pd.DataFrame:
     out = frame.assign(rowid=frame["rowid"].astype(str)).merge(s, on="rowid", how="left")
     if len(out) != len(frame) or out[NEW].isna().any().any():
         raise SystemExit(f"seq_{name}: rows without 50-click sequence features")
+    for spec in A.swap:
+        prefix, folder = spec.split("=")
+        cols = [f"{prefix}_prob", f"{prefix}_noclick", f"{prefix}_rank"]
+        b = lf.CUT if name == "full_eval" else int(name[1:])
+        x = pd.read_parquet(HERE / "cache" / folder / f"{b}.parquet")
+        x = x.assign(rowid=x["rowid"].astype(str)).rename(columns=dict(zip(["cmf_prob", "cmf_noclick", "cmf_rank"], cols)))
+        out = out.drop(columns=cols).merge(x, on="rowid", how="left")
+        if len(out) != len(frame) or out[cols].isna().any().any():
+            raise SystemExit(f"{folder}/{b}: rows without the replacement {prefix} features")
     return out
 
 

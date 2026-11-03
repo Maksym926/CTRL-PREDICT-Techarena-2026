@@ -31,9 +31,11 @@ ap.add_argument("--seq", default="stage3_h50", help="folder under cache/seq with
 ap.add_argument("--tag", default="", help="suffix for the output names (needed with another --seq)")
 ap.add_argument("--extra", default="", help="another folder under cache/seq whose per-boundary files (rowid + "
                                             "columns, e.g. fullmf_model.py's fmf_*) are merged in as well")
+ap.add_argument("--swap", nargs="*", default=[], help="prefix=folder: the folder under cache/ (cmf_seeds.py --merge, "
+                                                      "<boundary>.parquet) replaces the <prefix>_prob/_noclick/_rank columns")
 ARGS = ap.parse_args()
-if (ARGS.seq != "stage3_h50" or ARGS.extra) and not ARGS.tag:
-    raise SystemExit("another --seq or an --extra needs a --tag, or step 7's own outputs would be overwritten")
+if (ARGS.seq != "stage3_h50" or ARGS.extra or ARGS.swap) and not ARGS.tag:
+    raise SystemExit("another --seq, --extra or --swap needs a --tag, or step 7's own outputs would be overwritten")
 sys.argv = sys.argv[:1]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -71,6 +73,15 @@ def add_seq50(frame: pd.DataFrame, name: str) -> pd.DataFrame:
         out = out.merge(x.assign(rowid=x["rowid"].astype(str)), on="rowid", how="left")
         if len(out) != len(frame) or out[cols].isna().any().any():
             raise SystemExit(f"{ARGS.extra}/seq_{name}: rows without the extra features")
+    for spec in ARGS.swap:
+        prefix, folder = spec.split("=")
+        cols = [f"{prefix}_prob", f"{prefix}_noclick", f"{prefix}_rank"]
+        b = lf.CUT if name == "full_eval" else int(name[1:])
+        x = pd.read_parquet(HERE / "cache" / folder / f"{b}.parquet")
+        x = x.assign(rowid=x["rowid"].astype(str)).rename(columns=dict(zip(["cmf_prob", "cmf_noclick", "cmf_rank"], cols)))
+        out = out.drop(columns=cols).merge(x, on="rowid", how="left")
+        if len(out) != len(frame) or out[cols].isna().any().any():
+            raise SystemExit(f"{folder}/{b}: rows without the replacement {prefix} features")
     return out
 
 
