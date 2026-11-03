@@ -36,10 +36,13 @@ ap.add_argument("--swap", nargs="*", default=[], help="prefix=folder: the folder
 ap.add_argument("--lgb", nargs="*", default=[], help="key=value LightGBM overrides on top of the Optuna parameters, "
                                                      "e.g. learning_rate=0.015 num_leaves=31")
 ap.add_argument("--max-trees", type=int, default=0, help="cap of the inner-holdout tree search (default 2500)")
+ap.add_argument("--tree-mult", type=float, default=1.0, help="scale the inner-holdout tree count for the full fit "
+                                                             "(which has one more window of data)")
 ARGS = ap.parse_args()
-if (ARGS.seq != "stage3_h50" or ARGS.extra or ARGS.swap or ARGS.lgb or ARGS.max_trees) and not ARGS.tag:
-    raise SystemExit("another --seq, --extra, --swap, --lgb or --max-trees needs a --tag, or step 7's own outputs "
-                     "would be overwritten")
+if (ARGS.seq != "stage3_h50" or ARGS.extra or ARGS.swap or ARGS.lgb or ARGS.max_trees or ARGS.tree_mult != 1.0) \
+        and not ARGS.tag:
+    raise SystemExit("another --seq, --extra, --swap, --lgb, --max-trees or --tree-mult needs a --tag, or step 7's "
+                     "own outputs would be overwritten")
 sys.argv = sys.argv[:1]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -112,7 +115,7 @@ def validate() -> None:
     ev = load_events("eval")
     eval_frame = pd.DataFrame({"history_length": np.repeat(ev["history_item_ids"].list.len().to_numpy(), 10).astype(float),
                                "gap_hours": np.repeat((ev["timestamp"].to_numpy() - lf.CUT) / 3600.0, 10)})
-    n_trees = lf.inner_holdout_trees(tr, bounds, cols)
+    n_trees = int(round(lf.inner_holdout_trees(tr, bounds, cols) * ARGS.tree_mult))
     pred, m = lf.fit_seeds(tr, va, cols, n_trees)
     label = "step 5 retrained from the saved frames" if ARGS.baseline else "STEP 7: step 5 + 50-click sequence features"
     res = lf.evaluate(label, va, pred, split, eval_frame)
@@ -143,7 +146,7 @@ def submit() -> None:
     tr, te = with_seq50(load("step5_full_train"), bounds, load("step5_full_test"), "full_eval")
     cols = lf.model_columns(tr)
     lf.log(f"submission: {len(tr):,} training rows, {len(te):,} evaluation rows, {len(cols)} features")
-    n_trees = lf.inner_holdout_trees(tr, bounds, cols)
+    n_trees = int(round(lf.inner_holdout_trees(tr, bounds, cols) * ARGS.tree_mult))
     pred, _ = lf.fit_seeds(tr, te, cols, n_trees)
     out = lf.REPO / "submissions" / f"{NAME}.csv"
     pd.DataFrame({"rowid": te["rowid"].astype(str), "predicted_probability": pred}).to_csv(out, index=False)
