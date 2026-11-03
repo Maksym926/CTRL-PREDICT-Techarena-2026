@@ -25,8 +25,10 @@ from src.data import load_candidates, load_events  # noqa: E402
 from src.evaluate import auc  # noqa: E402
 from src.validation import DAY, make_split, score  # noqa: E402
 
-HISTORY = 20
+GIVEN = 20  # the data's history length (last 20 clicks)
+HISTORY = 20  # slots the model sees; --history > 20 prepends older known clicks (set before encoding)
 OUT_DIR = Path("data/validation")
+_KNOWN = None  # cache of known_clicks()
 
 
 def log(msg: str) -> None:
@@ -43,8 +45,52 @@ def code_maps() -> tuple[dict, dict]:
     return {u: i for i, u in enumerate(users)}, {it: i for i, it in enumerate(items)}
 
 
+def known_clicks(umap: dict, imap: dict) -> np.ndarray:
+    """Every known (user, time, item) click: train and eval histories plus labelled train clicks, as codes sorted by
+    user, then time (for --history > 20)."""
+    global _KNOWN
+    if _KNOWN is None:
+        te, ee = load_events("train"), load_events("eval")
+        hist = (pl.concat([te, ee]).select("user_id", "history_item_ids", "history_timestamps")
+                .explode(["history_item_ids", "history_timestamps"]).drop_nulls("history_item_ids")
+                .select("user_id", pl.col("history_timestamps").cast(pl.Int64).alias("ts"),
+                        pl.col("history_item_ids").alias("item_id")))
+        lab = (load_candidates("train").filter(pl.col("clicked") == 1)
+               .join(te.select("event_id", "user_id", pl.col("timestamp").cast(pl.Int64).alias("ts")), on="event_id")
+               .select("user_id", "ts", "item_id"))
+        k = pl.concat([hist, lab]).unique()
+        arr = np.stack([k["user_id"].replace_strict(umap, return_dtype=pl.Int64).to_numpy(), k["ts"].to_numpy(),
+                        k["item_id"].replace_strict(imap, return_dtype=pl.Int64).to_numpy()], 1)
+        _KNOWN = arr[np.lexsort((arr[:, 2], arr[:, 1], arr[:, 0]))]
+    return _KNOWN
+
+
+def extend_history(hist20: np.ndarray, hist_t20: np.ndarray, hist_len: np.ndarray, user: np.ndarray,
+                   umap: dict, imap: dict) -> np.ndarray:
+    """--history: widen the right-aligned 20-click history to HISTORY slots, filling the free slots before the given
+    clicks with the user's known clicks strictly older than the oldest given one (most recent ones, oldest first). A
+    history holds a user's last 20 clicks, so older clicks only ever appear in earlier events' histories: nothing at
+    or after the event can enter."""
+    kc = known_clicks(umap, imap)
+    key = kc[:, 0] * 10 ** 10 + kc[:, 1]  # timestamps < 1e10
+    n, pad = len(hist20), len(imap)
+    oldest = hist_t20[np.arange(n), GIVEN - np.maximum(hist_len, 1)]
+    start = np.searchsorted(key, user * 10 ** 10, side="left")
+    end = np.where(hist_len > 0, np.searchsorted(key, user * 10 ** 10 + oldest, side="left"), start)
+    k = np.minimum(end - start, HISTORY - hist_len)
+    hist = np.full((n, HISTORY), pad, dtype=np.int64)
+    hist[:, HISTORY - GIVEN:] = hist20
+    rows = np.repeat(np.arange(n), k)
+    pos = np.arange(k.sum()) - np.repeat(np.cumsum(k) - k, k)
+    hist[rows, np.repeat(HISTORY - hist_len - k, k) + pos] = kc[np.repeat(end - k, k) + pos, 2]
+    log(f"  histories widened to {HISTORY}: {(k > 0).mean():.1%} of {n:,} events gained older clicks "
+        f"(mean length {hist_len.mean():.1f} -> {(hist_len + k).mean():.1f})")
+    return hist
+
+
 def encode(events: pl.DataFrame, cands: pl.DataFrame, umap: dict, imap: dict) -> dict[str, np.ndarray]:
-    """Arrays for a set of events (in the order given); history right-aligned so slot 19 is the latest click."""
+    """Arrays for a set of events (in the order given); history right-aligned so the last slot is the latest click.
+    Repeat and no-click inputs always come from the data's own 20-click history."""
     events = events.with_row_index("e")
     labelled = "clicked" in cands.columns
     cols = ["item_id", "rowid"] + (["clicked"] if labelled else [])
@@ -63,13 +109,13 @@ def encode(events: pl.DataFrame, cands: pl.DataFrame, umap: dict, imap: dict) ->
         label = np.full(n, -1)
 
     hist_len = j["history_item_ids"].list.len().to_numpy()
-    hist = np.full((n, HISTORY), pad, dtype=np.int64)
-    hist_t = np.zeros((n, HISTORY), dtype=np.int64)
+    hist = np.full((n, GIVEN), pad, dtype=np.int64)
+    hist_t = np.zeros((n, GIVEN), dtype=np.int64)
     h = (j.select("e", "history_item_ids", "history_timestamps").filter(pl.col("history_item_ids").list.len() > 0)
          .with_columns(pl.col("history_item_ids").list.len().alias("n"))
          .explode(["history_item_ids", "history_timestamps"])
          .with_columns(pl.int_range(pl.len()).over("e").alias("k")))
-    e_idx, slot = h["e"].to_numpy(), HISTORY - h["n"].to_numpy() + h["k"].to_numpy()
+    e_idx, slot = h["e"].to_numpy(), GIVEN - h["n"].to_numpy() + h["k"].to_numpy()
     hist[e_idx, slot] = h["history_item_ids"].replace_strict(imap, return_dtype=pl.Int64).to_numpy()
     hist_t[e_idx, slot] = h["history_timestamps"].to_numpy()
 
@@ -77,18 +123,20 @@ def encode(events: pl.DataFrame, cands: pl.DataFrame, umap: dict, imap: dict) ->
     # Repeat features: is the candidate in the history, how often, how long ago it was last clicked
     eq = cand[:, :, None] == hist[:, None, :]
     count = eq.sum(-1)
-    last_slot = np.where(eq, np.arange(HISTORY), -1).max(-1)
+    last_slot = np.where(eq, np.arange(GIVEN), -1).max(-1)
     present = last_slot >= 0
     last_t = np.take_along_axis(hist_t, np.maximum(last_slot, 0), axis=1)
     age_h = np.where(present, (ts[:, None] - last_t) / 3600.0, 0.0)
     rep = np.stack([present, np.log1p(count), present * np.exp(-age_h / 24.0), present * np.log1p(age_h)], -1)
 
     gap_h = np.where(hist_len > 0, (ts - hist_t[:, -1]) / 3600.0, 0.0)
-    noclick = np.stack([hist_len / HISTORY, np.log1p(gap_h), hist_len == 0], -1)
+    noclick = np.stack([hist_len / GIVEN, np.log1p(gap_h), hist_len == 0], -1)
 
-    return {"user": j["user_id"].replace_strict(umap, return_dtype=pl.Int64).to_numpy(), "cand": cand, "hist": hist,
-            "rep": rep.astype(np.float32), "noclick": noclick.astype(np.float32), "label": label, "rowid": rowid,
-            "ts": ts}
+    user = j["user_id"].replace_strict(umap, return_dtype=pl.Int64).to_numpy()
+    if HISTORY > GIVEN:
+        hist = extend_history(hist, hist_t, hist_len, user, umap, imap)
+    return {"user": user, "cand": cand, "hist": hist, "rep": rep.astype(np.float32),
+            "noclick": noclick.astype(np.float32), "label": label, "rowid": rowid, "ts": ts}
 
 
 def first_per_user(events: pl.DataFrame) -> pl.DataFrame:
@@ -234,7 +282,7 @@ def holdout_auc(model: ChoiceMF, holdout: dict) -> float:
 
 def cells(d: dict) -> np.ndarray:
     """History-length x time-since-last-click cell of each event (the buckets Monish used for reweighting)."""
-    hist_len = np.rint(d["noclick"][:, 0] * HISTORY)
+    hist_len = np.rint(d["noclick"][:, 0] * GIVEN)
     gap_h = np.expm1(d["noclick"][:, 1])
     return np.digitize(hist_len, [1, 10, 20]) * 5 + np.digitize(gap_h, [6, 24, 72, 168])
 
@@ -324,8 +372,13 @@ def main() -> None:
     ap.add_argument("--max-epochs", type=int, default=15)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="", help="suffix for the validation output file (keeps the reference file intact)")
+    ap.add_argument("--history", type=int, default=GIVEN,
+                    help="history slots: the given 20 + older known clicks (each strictly older than the oldest given)")
+    ap.add_argument("--threads", type=int, default=12)
     args = ap.parse_args()
-    torch.set_num_threads(12)
+    global HISTORY
+    HISTORY = max(args.history, GIVEN)
+    torch.set_num_threads(args.threads)
     t0 = time.perf_counter()
 
     split = make_split(args.cutoff_day)

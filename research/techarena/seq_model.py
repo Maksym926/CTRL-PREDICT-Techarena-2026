@@ -31,17 +31,29 @@ Options beyond the original model:
               event: the clicked item + 9 fillers drawn from the filler distribution. The data looks built that way
               (the non-clicked candidates of clicked and no-click events are statistically identical), and these are
               2.4x the event clicks before day 4. Their loss covers the 10 candidates only (no no-click option).
+              That version lost 0.001; --augment-fill 0.019 fixes two ways its events differed from real ones (no
+              history items among the fillers, so an in-history candidate was always the real click; histories
+              right-aligned while the real ones are left-aligned) and allows --hist.
   --hist N    histories of up to N clicks instead of the data's last 20: each event keeps its given history and gets
               the user's known clicks that are strictly older than the oldest of them prepended (from every history
               list and every labelled train click), so nothing at or after the event can enter. "Which item" accuracy
               keeps rising with known clicks, and evaluation users have 7 days of them.
   --search-once  (windows) the epoch count comes from the first, largest fit's inner holdout and is reused for the
               other boundaries instead of searching at each (with 20-click histories 12 of 13 searches gave 1 epoch).
+  --sched cos  linear warmup (--warmup share of the steps), then cosine decay of the learning rate to 0 over exactly
+              --sched-epochs epochs; no epoch search (the inner holdout is still scored after each epoch). With a
+              constant rate the inner AUC falls from epoch 2 on, so the single epoch ends at full learning rate.
+  --right-align  position embeddings count back from the latest click (the newest is always the last position),
+              instead of forward from the oldest, so a position means the same recency for every history length.
+  --save-inner  where the epoch search runs, also fit the other seeds on the inner fit and write the seed-averaged
+              inner-holdout predictions (inner_<name>.parquet), so variants and their ensembles can be compared
+              without touching validation.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -228,14 +240,21 @@ def batch_arrays(d: Events, idx: np.ndarray, cut: int | None = None, skips: int 
     return out
 
 
-def pseudo_events(d: Events, b: int, n_items: int, seed: int, frac: float = 1.0) -> SimpleNamespace:
+def pseudo_events(d: Events, b: int, n_items: int, seed: int, frac: float = 1.0, hist_fill: float = 0.0,
+                  decay: float = 0.85) -> SimpleNamespace:
     """--augment: every pre-period click (before the first train event; known only from histories) as an extra
     next-item event, the way a clicked event looks: the clicked item plus 9 fillers drawn from the filler distribution
     (non-clicked candidates of events before b), the user's earlier pre-period clicks as history. Pre-period clicks
-    precede every boundary, so this is leak-free for any b."""
+    precede every boundary, so this is leak-free for any b.
+    hist_fill > 0 (--augment-fill) builds them like the real events instead: histories left-aligned (oldest first,
+    pads last, as Events stores them; the original right-aligned ones gave positions another meaning) and as wide as
+    the real ones (so it combines with --hist), and each filler slot is, with probability hist_fill, one of the user's
+    own earlier clicks (recency weights decay ** position, newest = 0), as the real filler sampler does in ~2% of
+    slots. Without that, an in-history candidate of a pseudo event is always the real click (~30% in real events)."""
     d0 = int(d.ts.min())
+    width = d.hist.shape[1] if hist_fill > 0 else HIST
     m = (d.hist > 0) & (d.hist_ts < d0)
-    raw = np.stack([np.repeat(d.user, HIST).reshape(-1, HIST)[m], d.hist_ts[m], d.hist[m]], 1)
+    raw = np.stack([np.repeat(d.user, d.hist.shape[1]).reshape(d.hist.shape)[m], d.hist_ts[m], d.hist[m]], 1)
     clicks = np.unique(raw, axis=0)  # sorted by user, time, item
     rng = np.random.default_rng(seed)
     if frac < 1:
@@ -244,16 +263,27 @@ def pseudo_events(d: Events, b: int, n_items: int, seed: int, frac: float = 1.0)
     n = len(u)
     j = np.arange(n)
     start = np.searchsorted(u, u, side="left")  # first row of each user's clicks
-    prev = j[:, None] - np.arange(HIST, 0, -1)[None, :]  # the 20 rows before, oldest first
-    ok = prev >= start[:, None]
-    hist = np.where(ok, it[np.clip(prev, 0, None)], 0)
-    hist_ts = np.where(ok, t[np.clip(prev, 0, None)], 0)
+    if hist_fill > 0:
+        k = np.minimum(j - start, width)  # earlier clicks that fit, stored from slot 0
+        src = (j - k)[:, None] + np.arange(width)[None, :]
+        ok = np.arange(width)[None, :] < k[:, None]
+    else:
+        src = j[:, None] - np.arange(HIST, 0, -1)[None, :]  # the 20 rows before, oldest first, right-aligned
+        ok = src >= start[:, None]
+    hist = np.where(ok, it[np.clip(src, 0, n - 1)], 0)
+    hist_ts = np.where(ok, t[np.clip(src, 0, n - 1)], 0)
     before = d.ts < b
     q = np.bincount(d.cand[before][d.click[before] == 0], minlength=n_items + 1).astype(float)
     q[0] = 0.0
     q /= q.sum()
     cand = rng.choice(n_items + 1, size=(n, N_CAND), p=q)
     pos = rng.integers(0, N_CAND, n)
+    if hist_fill > 0:  # history fillers: newest-first position r with weight decay ** r, truncated to the history
+        fill = (rng.random((n, N_CAND)) < hist_fill) & (k[:, None] > 0)
+        rows, slot = np.nonzero(fill)
+        kk = k[rows]
+        r = np.floor(np.log1p(-rng.random(len(rows)) * (1 - decay ** kk)) / np.log(decay)).astype(np.int64)
+        cand[rows, slot] = hist[rows, kk - 1 - np.minimum(r, kk - 1)]
     cand[j, pos] = it
     clash = cand == it[:, None]
     clash[j, pos] = False
@@ -290,8 +320,9 @@ def svd_init(d: Events, b: int, n_users: int, n_items: int, rank: int = 11) -> n
 # ---------------------------------------------------------------- model
 class SeqModel(nn.Module):
     def __init__(self, n_users: int, n_items: int, dim: int, layers: int, heads: int, dropout: float,
-                 init: np.ndarray | None, skips: bool = False, n_hist: int = HIST):
+                 init: np.ndarray | None, skips: bool = False, n_hist: int = HIST, right_align: bool = False):
         super().__init__()
+        self.right_align = right_align
         self.item = nn.Embedding(n_items + 1, dim, padding_idx=0)
         nn.init.normal_(self.item.weight, std=0.01)
         if init is not None:
@@ -333,7 +364,14 @@ class SeqModel(nn.Module):
         # direct MF path: raw history average + user vector, so training starts from the SVD taste match
         q = e.sum(1) / (hist > 0).sum(1, keepdim=True).clamp(min=1) + u
         tok = e + self.age(b["age"])
-        seq = torch.cat([u[:, None], tok], 1) + self.pos.weight[None]
+        if self.right_align:  # histories are left-aligned (oldest first, pads last): the newest click gets position width
+            width = hist.shape[1]
+            n_valid = (hist > 0).sum(1, keepdim=True)
+            pid = (width - n_valid + 1 + torch.arange(width, device=hist.device)[None]).clamp(max=width)
+            pos = self.pos(torch.cat([torch.zeros_like(n_valid), pid], 1))
+        else:
+            pos = self.pos.weight[None]
+        seq = torch.cat([u[:, None], tok], 1) + pos
         pad = torch.cat([torch.zeros(n, 1, dtype=torch.bool, device=hist.device), hist == 0], 1)
         if "skip" in b:  # skipped items join the sequence as extra tokens (no position, a type vector instead)
             stok = self.item(b["skip"]) + self.age(b["skip_age"]) + self.skip_type
@@ -384,7 +422,7 @@ def fit(args, d: Events, n_users: int, n_items: int, b: int, epochs: int, device
         idx = np.sort(np.random.choice(idx, int(len(idx) * args.fit_frac), replace=False))
     arrays = batch_arrays(d, idx, skips=args.skips)
     if args.augment:
-        pe = pseudo_events(d, b, n_items, seed, frac=args.fit_frac)
+        pe = pseudo_events(d, b, n_items, seed, frac=args.fit_frac, hist_fill=args.augment_fill)
         extra = batch_arrays(pe, np.arange(len(pe.user)))
         arrays = {k: np.concatenate([arrays[k], extra[k]]) for k in arrays}
         arrays["pseudo"] = np.r_[np.zeros(len(idx), bool), np.ones(len(pe.user), bool)]
@@ -393,8 +431,14 @@ def fit(args, d: Events, n_users: int, n_items: int, b: int, epochs: int, device
     n_rows = len(arrays["user"])
     model = SeqModel(n_users, n_items, args.dim, args.layers, args.heads, args.dropout,
                      svd_init(d, b, n_users, n_items) if args.svd_init else None, skips=args.skips > 0,
-                     n_hist=d.hist.shape[1]).to(device)
+                     n_hist=d.hist.shape[1], right_align=args.right_align).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
+    sched = None
+    if args.sched == "cos":  # warmup, then cosine to 0 at the end of the last epoch
+        total = epochs * -(-n_rows // args.batch)
+        warm = max(1, int(args.warmup * total))
+        sched = torch.optim.lr_scheduler.LambdaLR(
+            opt, lambda k: (k + 1) / warm if k < warm else 0.5 * (1 + math.cos(math.pi * (k - warm) / max(1, total - warm))))
     curve, best, misses, best_pred = [], -1.0, 0, None
     if holdout is not None:
         p0 = predict(model, holdout[0])[:, 1:]
@@ -416,6 +460,8 @@ def fit(args, d: Events, n_users: int, n_items: int, b: int, epochs: int, device
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
+            if sched is not None:
+                sched.step()
             total += loss.item() * len(bi)
             step = s // args.batch + 1
             if args.log_every and step % args.log_every == 0:
@@ -425,21 +471,24 @@ def fit(args, d: Events, n_users: int, n_items: int, b: int, epochs: int, device
             probs = predict(model, holdout[0])
             curve.append(float(roc_auc_score(holdout[1].ravel(), probs[:, 1:].ravel())))
             msg += f", inner-holdout AUC {curve[-1]:.6f}"
-            if curve[-1] > best:
+            if sched is not None:  # fixed schedule: the model is the last epoch's
+                best_pred = probs
+            elif curve[-1] > best:
                 best, misses, best_pred = curve[-1], 0, probs
             else:
                 misses += 1
         log(msg)
-        if holdout is not None and misses >= args.patience:
+        if holdout is not None and misses >= args.patience and sched is None:
             break
     return model, curve, best_pred
 
 
 def run_boundary(args, d: Events, n_users: int, n_items: int, b: int, target_idx: np.ndarray, target: Events,
-                 device, fallback_epochs: int | None = None) -> tuple[pd.DataFrame, dict]:
+                 device, fallback_epochs: int | None = None, name: str = "") -> tuple[pd.DataFrame, dict]:
     """Pick epochs on the inner holdout before b, refit on everything before b, score the targets."""
     bi = b - INNER_GAP
     n_inner = int(np.sum(d.ts < bi))
+    ens_auc = None
     if args.search_once and fallback_epochs is not None:
         curve, epochs = [], fallback_epochs
         log(f"boundary {b}: --search-once, using {epochs} epoch(s) from the first boundary")
@@ -451,18 +500,26 @@ def run_boundary(args, d: Events, n_users: int, n_items: int, b: int, target_idx
         hold = batch_arrays(d, hold_idx, cut=bi, skips=args.skips)
         hold_dev = to_device(hold, device)
         log(f"boundary {b}: inner fit {n_inner:,} events, inner holdout {len(hold_idx):,} events")
-        _, curve, best_pred = fit(args, d, n_users, n_items, bi, args.max_epochs, device, args.seed,
+        n_ep = args.max_epochs if args.sched == "const" else args.sched_epochs
+        _, curve, best_pred = fit(args, d, n_users, n_items, bi, n_ep, device, args.seed,
                                   holdout=(hold_dev, hold["click"]))
-        epochs = int(np.argmax(curve)) + 1
-        log(f"boundary {b}: best inner epoch {epochs} (AUC {max(curve):.6f})")
-    if args.inner_only:
-        info = {"boundary": b, "inner_curve": curve, "epochs": epochs, "best_inner_auc": max(curve, default=None)}
-        if args.seeds > 1 and curve:  # the ensemble's inner score: seed 0 at its best epoch + the others at that epoch
+        epochs = int(np.argmax(curve)) + 1 if args.sched == "const" else n_ep
+        log(f"boundary {b}: inner epoch {epochs} (AUC {curve[epochs - 1]:.6f})")
+        if (args.inner_only and args.seeds > 1) or args.save_inner:
+            # the ensemble's inner score: the first seed at the chosen epoch + the others trained for that many epochs
             preds = [best_pred] + [predict(fit(args, d, n_users, n_items, bi, epochs, device, args.seed + s)[0],
                                            hold_dev) for s in range(1, args.seeds)]
-            info["ensemble_inner_auc"] = float(roc_auc_score(hold["click"].ravel(),
-                                                             np.mean(preds, 0)[:, 1:].ravel()))
-            log(f"boundary {b}: {args.seeds}-seed ensemble inner AUC {info['ensemble_inner_auc']:.6f}")
+            ens = np.mean(preds, 0)
+            ens_auc = float(roc_auc_score(hold["click"].ravel(), ens[:, 1:].ravel()))
+            log(f"boundary {b}: {args.seeds}-seed ensemble inner AUC {ens_auc:.6f}")
+            if args.save_inner:
+                pd.DataFrame({"rowid": d.rowid[hold_idx].ravel(), "seq_prob": ens[:, 1:].ravel(),
+                              "seq_noclick": np.repeat(ens[:, 0], N_CAND), "clicked": hold["click"].ravel()}
+                             ).to_parquet(args.out / f"inner_{name}.parquet", index=False)
+    if args.inner_only:
+        info = {"boundary": b, "inner_curve": curve, "epochs": epochs, "best_inner_auc": max(curve, default=None)}
+        if ens_auc is not None:
+            info["ensemble_inner_auc"] = ens_auc
         return None, info
     log(f"refitting {args.seeds} seed(s) on {np.sum(d.ts < b):,} events")
     target_dev = to_device(batch_arrays(target, target_idx, cut=b, skips=args.skips), device)
@@ -472,7 +529,10 @@ def run_boundary(args, d: Events, n_users: int, n_items: int, b: int, target_idx
     out = pd.DataFrame({"rowid": target.rowid[target_idx].ravel(), "seq_prob": p.ravel(),
                         "seq_noclick": np.repeat(probs[:, 0], N_CAND),
                         "seq_rank": ((-p).argsort(1).argsort(1) + 1).ravel().astype(np.float32)})
-    return out, {"boundary": b, "inner_curve": curve, "epochs": epochs, "targets": int(len(target_idx))}
+    info = {"boundary": b, "inner_curve": curve, "epochs": epochs, "targets": int(len(target_idx))}
+    if ens_auc is not None:
+        info["ensemble_inner_auc"] = ens_auc
+    return out, info
 
 
 def main(argv: list[str] | None = None, loaded: tuple | None = None) -> None:
@@ -500,17 +560,29 @@ def main(argv: list[str] | None = None, loaded: tuple | None = None) -> None:
     ap.add_argument("--skips", type=int, default=0,
                     help="add the items shown but not clicked in the user's last N events (0 = off)")
     ap.add_argument("--augment", action="store_true", help="add pre-period clicks as extra next-item events")
+    ap.add_argument("--augment-fill", type=float, default=0.0,
+                    help="--augment built like real events: left-aligned histories, and this share of filler slots "
+                         "drawn from the user's own earlier clicks (real slates: ~0.019)")
     ap.add_argument("--hist", type=int, default=HIST, help="history length: the given 20 + older known clicks")
     ap.add_argument("--search-once", action="store_true",
                     help="windows: choose epochs on the first (latest) boundary's inner holdout, reuse them for the rest")
+    ap.add_argument("--sched", choices=["const", "cos"], default="const",
+                    help="cos: warmup, then cosine decay to 0 over exactly --sched-epochs epochs (no epoch search)")
+    ap.add_argument("--warmup", type=float, default=0.03, help="--sched cos: share of the steps spent warming up")
+    ap.add_argument("--sched-epochs", type=int, default=1, help="--sched cos: number of epochs the decay spans")
+    ap.add_argument("--right-align", action="store_true", help="position embeddings count back from the latest click")
+    ap.add_argument("--save-inner", action="store_true",
+                    help="write the seed-averaged inner-holdout predictions where the epoch search runs")
     ap.add_argument("--fit-frac", type=float, default=1.0, help="<1 only for quick smoke tests")
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--log-every", type=int, default=0, help="print the running loss every N steps")
     args = ap.parse_args(argv)
     if args.augment and args.skips:
         raise SystemExit("--augment with --skips is not supported (pre-period events have no skipped items)")
-    if args.augment and args.hist != HIST:
-        raise SystemExit(f"--augment builds {HIST}-click histories; it cannot be combined with --hist")
+    if args.augment and args.hist != HIST and args.augment_fill <= 0:
+        raise SystemExit(f"--augment builds {HIST}-click histories; with --hist, use --augment-fill")
+    if args.augment_fill > 0 and not args.augment:
+        raise SystemExit("--augment-fill needs --augment")
     if args.hist < HIST:
         raise SystemExit(f"--hist must be at least {HIST} (the data's own history length)")
 
@@ -547,7 +619,8 @@ def main(argv: list[str] | None = None, loaded: tuple | None = None) -> None:
             last_epochs = json.loads(done.read_text())["epochs"]
             log(f"{name}: already done ({last_epochs} epoch(s)), skipping")
             continue
-        out, info = run_boundary(args, d, n_users, n_items, b, idx, target, device, fallback_epochs=last_epochs)
+        out, info = run_boundary(args, d, n_users, n_items, b, idx, target, device, fallback_epochs=last_epochs,
+                                 name=name)
         last_epochs = info["epochs"]
         info |= {"args": {k: str(v) for k, v in vars(args).items()}, "minutes": round((time.perf_counter() - T0) / 60, 1)}
         if out is None:  # --inner-only

@@ -3,8 +3,8 @@
 Usage (from the repo root):
     python research/techarena/merge_seq_dirs.py research/techarena/cache/seq/stage3_h50_s10 \
         research/techarena/cache/seq/stage3_h50 research/techarena/cache/seq/stage3_h50_more
-The seed counts come from each folder's JSONs (the Kaggle merge writes "seeds": [3, 2], i.e. 5). Every folder must hold
-the same 14 boundaries with identical rows.
+The seed counts come from each folder's JSONs (the Kaggle merge writes "seeds": [3, 2], i.e. 5; a single run, e.g. a
+seq_pair variant folder, has them in "args"). Every folder must hold the same 14 boundaries with identical rows.
 """
 import json
 import sys
@@ -20,7 +20,8 @@ assert len(names) == 14, f"{ins[0]}: {len(names)} files, 14 expected"
 for f in names:
     frames = [pd.read_parquet(d / f) for d in ins]
     infos = [json.loads((d / f.replace(".parquet", ".json")).read_text()) for d in ins]
-    seeds = np.array([sum(i["seeds"]) if isinstance(i.get("seeds"), list) else 1 for i in infos], float)
+    seeds = np.array([sum(i["seeds"]) if isinstance(i.get("seeds"), list)  # Kaggle merge of the per-GPU parts
+                      else int(i.get("args", {}).get("seeds", 1)) for i in infos], float)  # one seq_model.py run
     for fr in frames[1:]:
         assert (fr["rowid"].to_numpy() == frames[0]["rowid"].to_numpy()).all(), f"{f}: rows differ"
     w = seeds / seeds.sum()

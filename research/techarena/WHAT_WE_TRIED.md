@@ -1,6 +1,6 @@
 # Tech Arena 2026, Phase 1: full handoff (everything we tried)
 
-> **New session: read this file first.** Last updated 3 Nov 2026, 14:30 (LB 0.821624 recorded). It replaces `HANDOFF.md` (27 Oct) and
+> **New session: read this file first.** Last updated 3 Nov 2026, 17:20 (§13: the afternoon's tests). It replaces `HANDOFF.md` (27 Oct) and
 > `PROGRESS.md`. Results JSONs: `research/techarena/outputs/`; logs: `logs/` (`logs/overnight.log` = the 2–3 Nov
 > chronology).
 
@@ -15,10 +15,12 @@
 | Local → LB gap | +0.0145 to +0.0176 over 4 submissions (latest +0.0145; ~86% of the last local gain carried over) |
 | To reach LB 0.83 | +0.0084 on the LB, i.e. local ≈ 0.8155 (+0.0084 over the current best) |
 
-**Pending:**
-- `experiments.csv` row 005 added (LB 0.821624). Add a row for every further upload.
-- Commit the code (§11).
-- Optional: run Kaggle `seq_h50_more.ipynb` (§12).
+**Pending (3 Nov evening):**
+- Building `submissions/safe_v2_step7_softmax.csv` (new softmax partner with the 50-click features); blend with
+  `safe_v2_step7.csv` = local 0.807361 (+0.00023 vs 005).
+- Step 7 with the 30-seed sequence features (`cache/seq/stage3_h50_s30`, `--tag _s30`), then its submission if its
+  blend with the new partner reaches 0.807461 (§13). Queue log: `logs/queue_b.log`.
+- Commit the 3 Nov afternoon code (§13). Add an `experiments.csv` row for every upload.
 
 ---
 
@@ -299,3 +301,69 @@ outside information is still the most likely route to the big jump.
    from validation predictions).
 5. Outside hints (forum, FAQ, data description) on how clicks were generated; the 26-Oct board suggests the 0.83
    signal is widely known.
+
+Status after 3 Nov afternoon (§13): 1a (more seeds) done and used as a 20-seed average; 1e as the fixed
+augmentation, 1f, and 2 tested with no gain; 3 done (+0.00023); 1b, 1c, 1d are built as notebooks but not run.
+
+## 13. 3 Nov afternoon: hypothesis hunt, sequence-model variants, choice model with 50 clicks
+**Hypotheses for a hidden "0.83 signal", all ruled out** (probe scripts were in the session scratchpad):
+
+| Hypothesis | Finding |
+|---|---|
+| Items come in discrete groups (11 categories would also give "1 + 10 flat axes") | Pairwise cosine of well-observed items is one smooth hump; k-means inertia falls smoothly, no elbow at 11 |
+| Evaluation histories hide clicks not seen in train | None after CUT; the 0.5% unexplained entries are pre-period clicks of 1,159 users without train events |
+| Evaluation slates built differently | Same in-history share (0.0259 vs 0.0254) at every history length, same popularity |
+| Fillers matched to the real item's popularity | Raw corr +0.14, within user -0.009: a user-level taste effect |
+| Item lifecycles | Day-of-appearance chi-square as expected under none (median 5.3 for 6 df) |
+| Several interests per user | Mean similarity to history 0.767 within-event AUC vs max 0.710 |
+| Per-user time-bucket / weekend click propensity | Observed chi-square 55,903 vs 56,397 permuted (none) |
+| Per-user time-bucket / weekend taste | Same-bucket click pairs cosine 0.2740 vs 0.2738 |
+| Re-clicks vs history fillers | Signals exist (twice in history: real 0.53 vs once 0.37; newest position more often real) but are already features |
+| Other team's file, by group | It ranks re-click candidates, popular items and cold users higher; nudging ours that way on validation: 0 gain (our model is calibrated there) |
+
+**Sequence-model variants** (Kaggle, `--save-inner`; inner holdout of the evaluation fit, 29,940 events, 5 seeds each):
+
+| Variant | Inner | Validation alone |
+|---|---|---|
+| base h50, seeds 5-9 (`seq_pair_b/more`) | 0.822349 | 0.795818 |
+| LR warmup + cosine decay, 1 epoch (`cos`) | 0.822026 | 0.795595 |
+| fixed pre-period augmentation (`seq_aug`) | 0.821393 | 0.794636 |
+| positions counted from the latest click (`seq_pair_a/right`) | 0.821897 | — |
+| LR decay over 2 epochs (`seq_pair_a/cos2`) | 0.818200 | — |
+| average of more + cos + aug | 0.822957 | — |
+| average of all five | 0.823159 | — |
+| 20-seed average incl. stage3_h50 (`cache/seq/stage3_h50_s20`) | — | 0.796733 (vs 0.795763) |
+| **30-seed average** (stage3_h50 + the five, `cache/seq/stage3_h50_s30`) | — | **0.797228** |
+| bigger model dim 128 / 3 layers / 8 heads (`seq_pair_c/big`) | 0.821522 | — |
+| histories up to 100 clicks (`seq_pair_c/h100`) | 0.822661 | — (left out: +0.0003 alone, +0.00014 to the average) |
+
+**Stack results 3 Nov evening** (local; 005 = 0.807134):
+
+| Package | Local | File |
+|---|---|---|
+| A: step 7 + softmax partner with 50-click features | 0.807361 | `submissions/safe_v2_step7_blend2.csv` |
+| step 7 with the 30-seed sequence features (alone) | 0.807295 (+0.000394 vs step 7) | `submissions/safe_v2_step7_s30.csv` |
+| **B: step 7 s30 + that partner** | **0.807593 (+0.00046)** | `submissions/safe_v2_step7_s30_blend.csv` |
+| C (queued): + partner retrained on the s30 features | built only if >= 0.807693 | `submissions/safe_v2_step7_s30_blend_c.csv` |
+
+Tuning the 50/50 blend weight: cross-validated by user halves -0.000009 (flat between 0.5 and 0.6), so 50/50 stays.
+
+**Outside search (3 Nov evening):** nothing public about this challenge (its Agorize page needs a login). The only
+organiser hint is `starter_solution.py`'s docstring: it "does not use the structure of the actual data-generating
+model", a good solution should model user/item interactions directly "(e.g. matrix factorization)". Other 2026 Tech
+Arena rules (France) score a public part of the test data ("indicative only") and rank on a private part; if ours is
+the same, the public top may be partly noise. The challenge's own FAQ/forum is still unchecked (user only).
+**Full-catalogue probe** (`fullmf_probe.py`): user/item vectors + bias trained with a softmax over all 50,000 items on
+every known click; compared on validation "which item" AUC with the choice model, the 50-click sequence model and step 7.
+
+- The old `--augment` was buggy: pseudo events had P(real | in-history candidate) 0.983 vs 0.405 in real events
+  (no history fillers) and right-aligned histories. `--augment-fill 0.019` fixes both (0.404), yet it is still worse.
+- **Softmax partner with the 50-click features** (`softmax_step7.py`): alone 0.806884 (old partner 0.806305); blended
+  with step 7 0.807361 (+0.00023).
+- **Choice model with 50-click histories** (`src/choice_mf.py --history 50`, cheap aux-pop config): validation 0.788505
+  vs 0.788177 (+0.0003): the auxiliary all-clicks task already feeds older clicks into the user vector. No rebuild.
+
+**New code:** `seq_model.py` (`--sched cos`, `--right-align`, `--save-inner`, `--augment-fill`),
+`make_kaggle_notebook.py` (`kaggle/seq_aug.ipynb`, `seq_pair_a/b/c.ipynb`), `seq_inner_report.py` (compare variants
+on the inner holdout), `softmax_step7.py`, `blend_val.py` (rank-blend AUC from saved validation predictions),
+`safe_v2_step7.py --tag`, `merge_seq_dirs.py` (seed counts of single runs), `src/choice_mf.py --history/--threads`.

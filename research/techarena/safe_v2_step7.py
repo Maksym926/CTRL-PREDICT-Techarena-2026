@@ -7,6 +7,8 @@ Usage (from the repo root, after unzipping seq_h50.zip into research/techarena/c
     python research/techarena/safe_v2_step7.py --baseline   # step 5 retrained from the frames: 0.806467 (original run 0.806442)
     python research/techarena/safe_v2_step7.py              # validation (baseline: step 5 from the frames = 0.806467)
     python research/techarena/safe_v2_step7.py --submit     # submissions/safe_v2_step7.csv
+    python research/techarena/safe_v2_step7.py --seq seq_aug --tag _aug   # other sequence features: outputs named
+                                                            # safe_v2_step7_aug.*, so step 7's own files stay intact
 
 Why: within-event accuracy keeps rising with the user's known clicks, but the sequence model saw only the last 20;
 35% of validation targets (37% of evaluation users) have more. Same leak-free protocol: each extra click is strictly
@@ -26,7 +28,12 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--baseline", action="store_true", help="no new columns: checks the frames reproduce step 5")
 ap.add_argument("--submit", action="store_true")
 ap.add_argument("--seq", default="stage3_h50", help="folder under cache/seq with the 50-click features")
+ap.add_argument("--tag", default="", help="suffix for the output names (needed with another --seq)")
+ap.add_argument("--extra", default="", help="another folder under cache/seq whose per-boundary files (rowid + "
+                                            "columns, e.g. fullmf_model.py's fmf_*) are merged in as well")
 ARGS = ap.parse_args()
+if (ARGS.seq != "stage3_h50" or ARGS.extra) and not ARGS.tag:
+    raise SystemExit("another --seq or an --extra needs a --tag, or step 7's own outputs would be overwritten")
 sys.argv = sys.argv[:1]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -37,9 +44,10 @@ from src.validation import make_split  # noqa: E402
 lf.LGB_PARAMS.update(json.loads((HERE / "outputs" / "optuna_step4.json").read_text())["best_params"])  # as step 5
 LAB = HERE / "cache" / "lab"
 SEQ_DIR = HERE / "cache" / "seq" / ARGS.seq
-NAME = "safe_v2_step5_from_frames" if ARGS.baseline else "safe_v2_step7"
+NAME = "safe_v2_step5_from_frames" if ARGS.baseline else "safe_v2_step7" + ARGS.tag
 OUT = HERE / "outputs" / f"{NAME}.json"
 BASELINE = 0.806467  # step 5 retrained from these same frames (--baseline; the original step 5 run gave 0.806442)
+STEP7 = 0.806901  # step 7 itself (stage3_h50), the reference for other sequence features
 MIN_GAIN = 0.0005
 NEW = ["seq50_prob", "seq50_noclick", "seq50_rank"]
 
@@ -57,6 +65,12 @@ def add_seq50(frame: pd.DataFrame, name: str) -> pd.DataFrame:
     out = frame.assign(rowid=frame["rowid"].astype(str)).merge(s, on="rowid", how="left")
     if len(out) != len(frame) or out[NEW].isna().any().any():
         raise SystemExit(f"seq_{name}: rows without 50-click sequence features")
+    if ARGS.extra:
+        x = pd.read_parquet(HERE / "cache" / "seq" / ARGS.extra / f"seq_{name}.parquet")
+        cols = [c for c in x.columns if c != "rowid"]
+        out = out.merge(x.assign(rowid=x["rowid"].astype(str)), on="rowid", how="left")
+        if len(out) != len(frame) or out[cols].isna().any().any():
+            raise SystemExit(f"{ARGS.extra}/seq_{name}: rows without the extra features")
     return out
 
 
@@ -85,6 +99,8 @@ def validate() -> None:
     gain = res["local_auc"] - BASELINE
     decision = "SUBMIT" if gain >= MIN_GAIN and not ARGS.baseline else "DON'T SUBMIT"
     lf.log(f"change vs step 5 ({BASELINE}): {gain:+.6f} -> {decision} (needs +{MIN_GAIN})")
+    if ARGS.tag:
+        lf.log(f"change vs step 7 ({STEP7}, sequence features stage3_h50): {res['local_auc'] - STEP7:+.6f}")
     imp = dict(zip(cols, m.booster_.feature_importance(importance_type="gain")))
     order = sorted(cols, key=lambda c: -imp[c])
     results = {**res, "trees": n_trees, "delta_vs_step5": gain, "decision": decision,
