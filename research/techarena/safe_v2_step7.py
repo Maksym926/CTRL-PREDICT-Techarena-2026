@@ -40,11 +40,12 @@ ap.add_argument("--tree-mult", type=float, default=1.0, help="scale the inner-ho
                                                              "(which has one more window of data)")
 ap.add_argument("--share-feats", action="store_true", help="add the sequence models' within-event log-shares and their "
                                                             "50- minus 20-click difference as columns")
+ap.add_argument("--n-seeds", type=int, default=0, help="average this many LightGBM seeds instead of the usual 3")
 ARGS = ap.parse_args()
 if (ARGS.seq != "stage3_h50" or ARGS.extra or ARGS.swap or ARGS.lgb or ARGS.max_trees or ARGS.tree_mult != 1.0
-        or ARGS.share_feats) and not ARGS.tag:
-    raise SystemExit("another --seq, --extra, --swap, --lgb, --max-trees, --tree-mult or --share-feats needs a --tag, "
-                     "or step 7's own outputs would be overwritten")
+        or ARGS.share_feats or ARGS.n_seeds) and not ARGS.tag:
+    raise SystemExit("another --seq, --extra, --swap, --lgb, --max-trees, --tree-mult, --share-feats or --n-seeds needs "
+                     "a --tag, or step 7's own outputs would be overwritten")
 sys.argv = sys.argv[:1]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -58,6 +59,8 @@ for kv in ARGS.lgb:
     lf.LGB_PARAMS[key] = json.loads(value)
 if ARGS.max_trees:
     lf.MAX_TREES = ARGS.max_trees
+if ARGS.n_seeds:  # the usual seeds first, then new ones derived from them
+    lf.FULL_SEEDS = (list(lf.FULL_SEEDS) + [s + 7919 * k for k in range(1, 10) for s in lf.FULL_SEEDS])[:ARGS.n_seeds]
 LAB = HERE / "cache" / "lab"
 SEQ_DIR = HERE / "cache" / "seq" / ARGS.seq
 NAME = "safe_v2_step5_from_frames" if ARGS.baseline else "safe_v2_step7" + ARGS.tag
@@ -141,6 +144,7 @@ def validate() -> None:
     order = sorted(cols, key=lambda c: -imp[c])
     results = {**res, "trees": n_trees, "delta_vs_step5": gain, "decision": decision,
                "lgb_overrides": ARGS.lgb, "max_trees": lf.MAX_TREES, "share_feats": ARGS.share_feats,
+               "lgb_seeds": list(lf.FULL_SEEDS),
                "new_feature_ranks": {c: order.index(c) + 1 for c in NEW if c in cols},
                "top_features_by_gain": [(c, round(float(imp[c]))) for c in order[:15]],
                "minutes": round((time.perf_counter() - t0) / 60, 1)}
