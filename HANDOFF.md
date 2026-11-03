@@ -1,5 +1,9 @@
 # HANDOFF: full context for continuing in a new chat
 
+> **Superseded on 3 Nov 2026: read `research/techarena/WHAT_WE_TRIED.md` first.** It has the current state (best
+> local 0.807134, `submissions/safe_v2_step7_blend.csv`), all results, the code map and the next steps. Everything
+> below is the 27 Oct state, kept for reference.
+
 > New chat: "Read HANDOFF.md first, then continue." Written 27 Oct 2026. Team-facing summary: `PROGRESS.md` (covers
 > results up to 0.814; this file supersedes it).
 

@@ -1,13 +1,15 @@
 """Stage 3: step 4 + Optuna parameters + sequence-model features (seq_prob / seq_noclick / seq_rank) per window.
 
-Usage (from the repo root, after the Kaggle run: unzip seq_stage3.zip into research/techarena/cache/seq/stage3/):
-    python research/techarena/safe_v2_stage3.py            # validation (baseline: step 4 + Optuna = 0.804643)
-    python research/techarena/safe_v2_stage3.py --submit   # submissions/safe_v2_stage3.csv
+Usage (from the repo root, after the Kaggle run: unzip seq_stage3.zip into research/techarena/cache/seq/<name>/):
+    python research/techarena/safe_v2_stage3.py [--seq stage3]            # validation (baseline: step 4 + Optuna)
+    python research/techarena/safe_v2_stage3.py [--seq stage3] --submit   # submissions/safe_v2_<name>.csv
+--seq names the folder under cache/seq and the outputs: stage3 = 1 seed (local 0.805031), stage3_s5 = 5-seed average.
 
 Each window's sequence features come from a model trained only on events before that window's boundary
 (seq_model.py --mode windows), the same leak-free rule as the choice-model features. Decision rule, fixed before
 seeing the result: submit only if validation gains at least +0.0005 over step 4 + Optuna.
 """
+import argparse
 import json
 import sys
 import time
@@ -23,9 +25,15 @@ from safe_v2_step4 import build  # noqa: E402
 from src.data import load_candidates, load_events  # noqa: E402
 from src.validation import make_split  # noqa: E402
 
-SEQ_DIR = HERE / "cache" / "seq" / "stage3"
-OUT = HERE / "outputs" / "safe_v2_stage3.json"
+ap = argparse.ArgumentParser()
+ap.add_argument("--seq", default="stage3")
+ap.add_argument("--submit", action="store_true")
+ARGS = ap.parse_args()
+NAME = f"safe_v2_{ARGS.seq}"
+SEQ_DIR = HERE / "cache" / "seq" / ARGS.seq
+OUT = HERE / "outputs" / f"{NAME}.json"
 BASELINE = 0.804643  # step 4 + Optuna
+STAGE3_1SEED = 0.805031
 MIN_GAIN = 0.0005
 SEQ_COLS = ["seq_prob", "seq_noclick", "seq_rank"]
 lf.LGB_PARAMS.update(json.loads((HERE / "outputs" / "optuna_step4.json").read_text())["best_params"])
@@ -71,6 +79,7 @@ def validate() -> None:
     gain = res["local_auc"] - BASELINE
     lf.log(f"change vs step 4 + Optuna ({BASELINE}): {gain:+.6f} -> "
            + ("SUBMIT (gain >= +0.0005)" if gain >= MIN_GAIN else "DON'T SUBMIT (gain < +0.0005)"))
+    lf.log(f"change vs stage 3 with 1 seed ({STAGE3_1SEED}): {res['local_auc'] - STAGE3_1SEED:+.6f}")
 
     imp = dict(zip(cols, m.booster_.feature_importance(importance_type="gain")))
     order = sorted(cols, key=lambda c: -imp[c])
@@ -79,7 +88,7 @@ def validate() -> None:
                                                   "top_features_by_gain": [(c, round(float(imp[c]))) for c in order[:15]]},
                "minutes": round((time.perf_counter() - t0) / 60, 1)}
     pd.DataFrame({"rowid": va["rowid"].astype(str), "predicted_probability": pred}).to_parquet(
-        "data/validation/safe_v2_stage3_val_c4.parquet", index=False)
+        f"data/validation/{NAME}_val_c4.parquet", index=False)
     OUT.write_text(json.dumps(results, indent=2))
     print(json.dumps(results, indent=2))
 
@@ -97,10 +106,10 @@ def submit() -> None:
     lf.log(f"submission: {len(tr):,} training rows, {len(te):,} evaluation rows, {len(cols)} features")
     n_trees = lf.inner_holdout_trees(tr, bounds, cols)
     pred, _ = lf.fit_seeds(tr, te, cols, n_trees)
-    out = lf.REPO / "submissions" / "safe_v2_stage3.csv"
+    out = lf.REPO / "submissions" / f"{NAME}.csv"
     pd.DataFrame({"rowid": te["rowid"].astype(str), "predicted_probability": pred}).to_csv(out, index=False)
     lf.log(f"wrote {out} ({n_trees} trees, {(time.perf_counter() - t0) / 60:.1f} min)")
 
 
 if __name__ == "__main__":
-    submit() if "--submit" in sys.argv[1:] else validate()
+    submit() if ARGS.submit else validate()

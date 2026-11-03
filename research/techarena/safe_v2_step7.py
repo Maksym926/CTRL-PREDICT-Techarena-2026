@@ -1,0 +1,117 @@
+"""Step 7: step 5 + sequence-model features from histories of up to 50 known clicks (kaggle/seq_h50.ipynb), added next
+to the 20-click ones. Built on the frames step 5 already computed, so only the new columns are merged in:
+validation from cache/lab/step6_*.parquet (step 5's frames + step 6's event-relative columns, which are dropped),
+submission from cache/lab/step5_full_*.parquet.
+
+Usage (from the repo root, after unzipping seq_h50.zip into research/techarena/cache/seq/stage3_h50/):
+    python research/techarena/safe_v2_step7.py --baseline   # step 5 retrained from the frames: 0.806467 (original run 0.806442)
+    python research/techarena/safe_v2_step7.py              # validation (baseline: step 5 from the frames = 0.806467)
+    python research/techarena/safe_v2_step7.py --submit     # submissions/safe_v2_step7.csv
+
+Why: within-event accuracy keeps rising with the user's known clicks, but the sequence model saw only the last 20;
+35% of validation targets (37% of evaluation users) have more. Same leak-free protocol: each extra click is strictly
+older than the oldest of the event's given 20.
+Decision rule, fixed before seeing the result: build the submission only if validation gains at least +0.0005.
+"""
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--baseline", action="store_true", help="no new columns: checks the frames reproduce step 5")
+ap.add_argument("--submit", action="store_true")
+ap.add_argument("--seq", default="stage3_h50", help="folder under cache/seq with the 50-click features")
+ARGS = ap.parse_args()
+sys.argv = sys.argv[:1]
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import leakfree_safe_v2 as lf  # noqa: E402
+from src.data import load_events  # noqa: E402
+from src.validation import make_split  # noqa: E402
+
+lf.LGB_PARAMS.update(json.loads((HERE / "outputs" / "optuna_step4.json").read_text())["best_params"])  # as step 5
+LAB = HERE / "cache" / "lab"
+SEQ_DIR = HERE / "cache" / "seq" / ARGS.seq
+NAME = "safe_v2_step5_from_frames" if ARGS.baseline else "safe_v2_step7"
+OUT = HERE / "outputs" / f"{NAME}.json"
+BASELINE = 0.806467  # step 5 retrained from these same frames (--baseline; the original step 5 run gave 0.806442)
+MIN_GAIN = 0.0005
+NEW = ["seq50_prob", "seq50_noclick", "seq50_rank"]
+
+
+def load(name: str) -> pd.DataFrame:
+    f = pd.read_parquet(LAB / f"{name}.parquet")
+    step6 = [c for c in f.columns if c.endswith(("_best_other", "_margin")) or c in ("choice_first_votes",
+                                                                                    "choice_mean_rank")]
+    return f.drop(columns=step6)
+
+
+def add_seq50(frame: pd.DataFrame, name: str) -> pd.DataFrame:
+    s = pd.read_parquet(SEQ_DIR / f"seq_{name}.parquet")
+    s = s.assign(rowid=s["rowid"].astype(str)).rename(columns=dict(zip(["seq_prob", "seq_noclick", "seq_rank"], NEW)))
+    out = frame.assign(rowid=frame["rowid"].astype(str)).merge(s, on="rowid", how="left")
+    if len(out) != len(frame) or out[NEW].isna().any().any():
+        raise SystemExit(f"seq_{name}: rows without 50-click sequence features")
+    return out
+
+
+def with_seq50(train: pd.DataFrame, bounds: list[int], target: pd.DataFrame, target_name: str):
+    if ARGS.baseline:
+        return train, target
+    parts = [add_seq50(train[train["window_id"] == wi].reset_index(drop=True), f"b{b}") for wi, b in enumerate(bounds)]
+    return pd.concat(parts, ignore_index=True), add_seq50(target, target_name)
+
+
+def validate() -> None:
+    t0 = time.perf_counter()
+    split = make_split(lf.VAL_DAY)
+    bounds = lf.bounds_for(lf.VAL_DAY, half=True)
+    tr, va = with_seq50(load("step6_train"), bounds, load("step6_val"), f"b{split.cutoff_ts}")
+    cols = lf.model_columns(tr)
+    assert ARGS.baseline or set(NEW) <= set(cols)
+    lf.log(f"{len(tr):,} training rows, {len(cols)} features")
+    ev = load_events("eval")
+    eval_frame = pd.DataFrame({"history_length": np.repeat(ev["history_item_ids"].list.len().to_numpy(), 10).astype(float),
+                               "gap_hours": np.repeat((ev["timestamp"].to_numpy() - lf.CUT) / 3600.0, 10)})
+    n_trees = lf.inner_holdout_trees(tr, bounds, cols)
+    pred, m = lf.fit_seeds(tr, va, cols, n_trees)
+    label = "step 5 retrained from the saved frames" if ARGS.baseline else "STEP 7: step 5 + 50-click sequence features"
+    res = lf.evaluate(label, va, pred, split, eval_frame)
+    gain = res["local_auc"] - BASELINE
+    decision = "SUBMIT" if gain >= MIN_GAIN and not ARGS.baseline else "DON'T SUBMIT"
+    lf.log(f"change vs step 5 ({BASELINE}): {gain:+.6f} -> {decision} (needs +{MIN_GAIN})")
+    imp = dict(zip(cols, m.booster_.feature_importance(importance_type="gain")))
+    order = sorted(cols, key=lambda c: -imp[c])
+    results = {**res, "trees": n_trees, "delta_vs_step5": gain, "decision": decision,
+               "new_feature_ranks": {c: order.index(c) + 1 for c in NEW if c in cols},
+               "top_features_by_gain": [(c, round(float(imp[c]))) for c in order[:15]],
+               "minutes": round((time.perf_counter() - t0) / 60, 1)}
+    if not ARGS.baseline:
+        results["seq50_alone"] = lf.evaluate("50-click sequence model alone", va, va["seq50_prob"].to_numpy(), split,
+                                             eval_frame)
+        pd.DataFrame({"rowid": va["rowid"].astype(str), "predicted_probability": pred}).to_parquet(
+            f"data/validation/{NAME}_val_c4.parquet", index=False)
+    OUT.write_text(json.dumps(results, indent=2))
+    print(json.dumps(results, indent=2))
+
+
+def submit() -> None:
+    t0 = time.perf_counter()
+    bounds = lf.bounds_for(7, half=True)
+    tr, te = with_seq50(load("step5_full_train"), bounds, load("step5_full_test"), "full_eval")
+    cols = lf.model_columns(tr)
+    lf.log(f"submission: {len(tr):,} training rows, {len(te):,} evaluation rows, {len(cols)} features")
+    n_trees = lf.inner_holdout_trees(tr, bounds, cols)
+    pred, _ = lf.fit_seeds(tr, te, cols, n_trees)
+    out = lf.REPO / "submissions" / f"{NAME}.csv"
+    pd.DataFrame({"rowid": te["rowid"].astype(str), "predicted_probability": pred}).to_csv(out, index=False)
+    lf.log(f"wrote {out} ({n_trees} trees, {(time.perf_counter() - t0) / 60:.1f} min)")
+
+
+if __name__ == "__main__":
+    submit() if ARGS.submit else validate()

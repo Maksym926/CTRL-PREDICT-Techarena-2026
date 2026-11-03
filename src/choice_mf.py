@@ -188,9 +188,13 @@ class ChoiceMF(nn.Module):
             l2 = l2 + self.user_noclick(user).pow(2).sum(-1).mean()  # the only per-user parameter left
         return logits, l2
 
-    def click_loss(self, user, pos, n_neg: int):
-        """Auxiliary task on every past click: rank the clicked item above n_neg random items (taste only)."""
-        neg = torch.randint(0, self.pad, (len(user), n_neg))
+    def click_loss(self, user, pos, n_neg: int, neg_dist: torch.Tensor | None = None):
+        """Auxiliary task on every past click: rank the clicked item above n_neg random items (taste only). With
+        neg_dist the random items follow that distribution (e.g. the fillers'), otherwise they are uniform."""
+        if neg_dist is None:
+            neg = torch.randint(0, self.pad, (len(user), n_neg))
+        else:
+            neg = torch.multinomial(neg_dist, len(user) * n_neg, replacement=True).view(len(user), n_neg)
         items = torch.cat([pos.unsqueeze(1), neg], dim=1)
         scores = (self.item(items) * self.user(user).unsqueeze(1)).sum(-1)
         return nn.functional.cross_entropy(scores, torch.zeros(len(user), dtype=torch.long))
@@ -268,6 +272,10 @@ def train(d: dict, n_users: int, n_items: int, args, epochs: int, svd, holdout: 
     weight = torch.from_numpy(d["weight"]) if "weight" in d else None
     use_aux = clicks is not None and getattr(args, "aux_weight", 0) > 0
     aux = (torch.from_numpy(clicks[0]), torch.from_numpy(clicks[1])) if use_aux else None
+    neg_dist = None
+    if use_aux and getattr(args, "aux_pop", 0):  # contrast items drawn like the fillers: non-clicked candidates
+        filler = d["cand"][np.arange(1, 11)[None, :] != d["label"][:, None]]
+        neg_dist = torch.from_numpy(np.bincount(filler, minlength=n_items).astype(np.float64)).float()
     curve = []
     if holdout is not None:
         log(f"  before training: holdout AUC {holdout_auc(model, holdout):.5f}")
@@ -283,7 +291,7 @@ def train(d: dict, n_users: int, n_items: int, args, epochs: int, svd, holdout: 
             loss = ce + args.l2 * l2
             if aux is not None:
                 j = torch.randint(0, len(aux[0]), (len(idx) * args.aux_ratio,))
-                loss = loss + args.aux_weight * model.click_loss(aux[0][j], aux[1][j], args.aux_neg)
+                loss = loss + args.aux_weight * model.click_loss(aux[0][j], aux[1][j], args.aux_neg, neg_dist)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -309,10 +317,13 @@ def main() -> None:
     ap.add_argument("--aux-weight", type=float, default=0.0, help="weight of the auxiliary all-past-clicks task")
     ap.add_argument("--aux-ratio", type=int, default=2, help="click pairs per choice event in each batch")
     ap.add_argument("--aux-neg", type=int, default=20, help="random negative items per click pair")
+    ap.add_argument("--aux-pop", type=int, default=0,
+                    help="1 = draw the auxiliary negatives from the filler distribution instead of uniformly")
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--batch", type=int, default=1024)
     ap.add_argument("--max-epochs", type=int, default=15)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--tag", default="", help="suffix for the validation output file (keeps the reference file intact)")
     args = ap.parse_args()
     torch.set_num_threads(12)
     t0 = time.perf_counter()
@@ -362,7 +373,7 @@ def main() -> None:
     log(f"VALIDATION local AUC: {val_auc:.6f}   [starter 0.6039 | SVD alone 0.7701 | SAFE_v2 leak-free 0.7919]")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    preds.write_parquet(OUT_DIR / f"choice_mf_val_c{args.cutoff_day}.parquet")
+    preds.write_parquet(OUT_DIR / f"choice_mf_val_c{args.cutoff_day}{args.tag}.parquet")
     result = {"args": vars(args), "holdout_curve": curve, "epochs": epochs, "val_auc": val_auc,
               "minutes": round((time.perf_counter() - t0) / 60, 1)}
     print(json.dumps(result, indent=2))
