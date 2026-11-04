@@ -583,3 +583,24 @@ The context MLP's blend value rises as its learning rate falls (1e-3: −0.00003
 3e-4: +0.00002 / +0.00007; 2e-4: +0.00003 / +0.00011), but nothing clears +0.0001 on both halves yet. Batch 8: context
 lr 1e-4, and lr 2e-4 with refit seeds 3–5 (new `--patience`: early stop of the epoch search). This PC
 (`queues/queue_g.sh`) builds the context lr 3e-4 and lr 2e-4 submissions as reserves.
+
+Batch 8 (06:40–07:30): context MLP lr 1e-4 0.807895 alone (14 epochs, inner 0.813384), context lr 2e-4 with refit
+seeds 3–5 0.807917 (seeds 0–2: 0.807954). Pre-declared options (scratch `multi_c_blend2.py`; adopt only at ≥ +0.0001
+held-out on both halves):
+
+| Third model | Held-out gain over F |
+|---|---|
+| context lr 2e-4, 6 seeds | +0.00007 / +0.00012 |
+| context lr 1e-4 | +0.00001 / +0.00005 |
+| (a) base + context lr 2e-4 (6 seeds) | +0.00008 / +0.00010 |
+| (b) base + context lr 1e-4 | +0.00006 / +0.00006 |
+| (c) base + context lr 1e-4 + context lr 2e-4 (6 seeds) | +0.00008 / +0.00009 |
+
+**None clears the rule: F stays the file to upload.** The direction is consistent (≈ +0.00008, i.e. ≈ +0.00007 on the
+LB), so if a spare upload is wanted later, the candidate is option (a) as a new third model: it needs the context
+lr 2e-4 submission with 6 refit seeds (`queue_g.sh` builds seeds 0–2 →
+`submissions/safe_v2_step7_nn_s30_ctx_lr2.csv`; seeds 3–5 = the same command with `--seed-offset 3 --tag
+_s30_ctx_lr2_o3`, ≈ 1.2 h), the average of those with `safe_v2_step7_nn_s30.csv` as `--sub-c` (and the matching
+validation average as `--val-c`), then `final_blend.py`. Reserve file already built:
+`submissions/safe_v2_step7_nn_s30_ctx_lr3.csv` (context lr 3e-4, 5 epochs on the full frames, inner 0.833148 vs the
+base MLP's 0.832625).
