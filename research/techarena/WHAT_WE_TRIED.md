@@ -470,3 +470,18 @@ and swapped into step 7 s30: binary 0.807352 (C's 0.807295, +0.00006), softmax p
 choice models' seed noise (as with the width ensemble). The averaged folders stay in `cache/choicemf_*_avg`.
 Second PC checks: the `base` run reproduces this PC's 0.807295 exactly (and runs ~2.2× faster: ~11 min per
 validation); `--share-feats` 0.807325 (+0.00003, not used).
+
+**4 Nov 00:00–00:35, more tests (validation; reference binary 0.807295, C final blend 0.808133):**
+
+| Test | Result |
+|---|---|
+| Binary, learning rate 0.015 (2813 trees) | 0.807325 (+0.00003) |
+| Binary, trees × 1.2 | 0.807319 (+0.00002) |
+| Binary, 6 LightGBM seeds | 0.807293 (0) |
+| Lambdarank stack (`rank_step7.py`) as a third which input of the final blend | which-AUC 0.7943; held-out gains fall slightly (+0.000134 / +0.000263 vs +0.000165 / +0.000269): dropped |
+| **Softmax partner with step 4's tuned LightGBM parameters** (`softmax_step7.py --params outputs/optuna_step4.json`; the partner always ran on the untuned defaults) | **alone 0.807807 (was 0.807347), 1928 trees; rank blend 0.807933; final blend 0.808377 in-sample, held-out +0.00012 / +0.00032 over C's final blend** → package E |
+| Final blend under Monish's eval-reweighting (history/gap mix of the evaluation users) | rank 0.811507 → factorised 0.811626 → final 0.811867: the gain holds for an eval-like mix |
+
+Package E = C's binary + the tuned partner (`queues/queue_e.sh`: partner `--submit` with tree cap 4000, then
+`final_blend.py` → `submissions/safe_v2_step7_s30_final_e.csv`). The Optuna re-tune of the binary on step 7's frames
+(`optuna_step7.py`) runs on the second PC (optuna 5.0.0 had to be installed in its venv).
