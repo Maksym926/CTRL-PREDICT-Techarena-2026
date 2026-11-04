@@ -53,10 +53,13 @@ Options beyond the original model:
   --hist-drop P  while training, hide each history click with probability P (as padding), so the model cannot lean
               on any single click and sees each event with a different history on every pass.
   --item-lr-mult M  learning rate of the item vectors and biases = M x --lr (0 freezes them at the SVD start).
+  --ema D     predict with an exponential moving average of the weights (decay D per step, starting from the SVD
+              start), a one-model stand-in for the seed ensemble (1 seed 0.8194 -> 3 seeds 0.8217 on the inner holdout).
 """
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import time
@@ -454,6 +457,7 @@ def fit(args, d: Events, n_users: int, n_items: int, b: int, epochs: int, device
         warm = max(1, int(args.warmup * total))
         sched = torch.optim.lr_scheduler.LambdaLR(
             opt, lambda k: (k + 1) / warm if k < warm else 0.5 * (1 + math.cos(math.pi * (k - warm) / max(1, total - warm))))
+    ema = copy.deepcopy(model).requires_grad_(False) if args.ema else None
     curve, best, misses, best_pred = [], -1.0, 0, None
     if holdout is not None:
         p0 = predict(model, holdout[0])[:, 1:]
@@ -480,13 +484,17 @@ def fit(args, d: Events, n_users: int, n_items: int, b: int, epochs: int, device
             opt.step()
             if sched is not None:
                 sched.step()
+            if ema is not None:
+                with torch.no_grad():
+                    for pe, q in zip(ema.parameters(), model.parameters()):
+                        pe.lerp_(q, 1 - args.ema)
             total += loss.item() * len(bi)
             step = s // args.batch + 1
             if args.log_every and step % args.log_every == 0:
                 log(f"    step {step}: loss {total / min(s + args.batch, n_rows):.4f}")
         msg = f"  epoch {ep}: loss {total / n_rows:.4f} ({time.perf_counter() - t:.0f} s)"
         if holdout is not None:
-            probs = predict(model, holdout[0])
+            probs = predict(ema or model, holdout[0])
             curve.append(float(roc_auc_score(holdout[1].ravel(), probs[:, 1:].ravel())))
             msg += f", inner-holdout AUC {curve[-1]:.6f}"
             if sched is not None:  # fixed schedule: the model is the last epoch's
@@ -498,7 +506,7 @@ def fit(args, d: Events, n_users: int, n_items: int, b: int, epochs: int, device
         log(msg)
         if holdout is not None and misses >= args.patience and sched is None:
             break
-    return model, curve, best_pred
+    return ema or model, curve, best_pred
 
 
 def run_boundary(args, d: Events, n_users: int, n_items: int, b: int, target_idx: np.ndarray, target: Events,
@@ -594,6 +602,7 @@ def main(argv: list[str] | None = None, loaded: tuple | None = None) -> None:
     ap.add_argument("--no-user", action="store_true", help="no free user vector: a user is only their history")
     ap.add_argument("--hist-drop", type=float, default=0.0, help="training: hide each history click with this probability")
     ap.add_argument("--item-lr-mult", type=float, default=1.0, help="item vectors' learning rate = this x --lr (0 = frozen)")
+    ap.add_argument("--ema", type=float, default=0.0, help="predict with an EMA of the weights, this decay per step")
     ap.add_argument("--fit-frac", type=float, default=1.0, help="<1 only for quick smoke tests")
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--log-every", type=int, default=0, help="print the running loss every N steps")
