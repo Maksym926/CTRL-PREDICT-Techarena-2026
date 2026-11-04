@@ -1,29 +1,26 @@
 # Tech Arena 2026, Phase 1: full handoff (everything we tried)
 
-> **New session: read this file first.** Last updated 4 Nov 2026, 15:40 (§16: 4 Nov day). Deadline: 4 Nov midnight.
+> **New session: read this file first.** Last updated 4 Nov 2026, 16:00 (§17: 4 Nov late afternoon). Deadline: 4 Nov
+> midnight, Dublin time (this PC's clock).
 > It replaces `HANDOFF.md` (27 Oct) and `PROGRESS.md`. Results JSONs: `research/techarena/outputs/`; logs: `logs/`.
 
-**STATE 4 Nov 15:40 (read this first).**
-- LB best still **0.821624** (005). **Nothing uploaded today yet**; the user uploads. Ready and checked:
-  `submissions/safe_v2_step7_s30_final_f.csv` (F, expected LB ≈ 0.823).
-- **Package G is being built** and should replace F: same binary + tuned partner, third model = (2 × context MLP lr 2e-4
-  with 24 seeds + 1 × attention MLP lr 2e-4 with 12 seeds) / 3. Validation: held-out gain over F **+0.000123 /
-  +0.000190** (rule +0.0001 on both halves: passes; §16). Validation side done:
-  `data/validation/nn_step7_s30_g_mix_val_c4.parquet`. Submission side: the second PC's GPU runs
-  `D:\HuaweiTechArena\lgb_exp13.bat` (started ~15:35, ~60–70 min; log there `logs\gpu_exp.log`, writes
-  `submissions\safe_v2_step7_nn_s30_ctx_lr2_s24.csv` and `..._attn1_lr2_s12.csv` there). This PC runs
-  `bash research/techarena/queues/build_g.sh` (log `logs/build_g.log`): waits for "batch 13 (GPU) done", fetches the two
-  files as float32 arrays (row order checked by md5), mixes 2:1 (`queues/weighted_avg.py`), runs `final_blend.py` →
-  **`submissions/safe_v2_step7_s30_final_g.csv`**, then the checker. Ends with "package G finished".
-- **If you are a new session:** `tail logs/build_g.log`. If it says "package G finished" and the check line says
-  valid, recommend uploading G (expected LB ≈ F + 0.0001–0.0002). If build_g.sh is not running and G does not exist:
-  check the second PC (`ssh -o BatchMode=yes yulia@100.103.24.101 "type D:\HuaweiTechArena\CTRL-PREDICT-Techarena-2026\logs\gpu_exp.log"`);
-  if batch 13 finished, re-run `bash research/techarena/queues/build_g.sh` (safe to re-run); if it died, re-run
-  `ssh ... "D:\HuaweiTechArena\lgb_exp13.bat"` (it needs nothing else: the full frames and all 14
-  `stage3_h50_s30` files are now on the second PC). If time runs out, upload F.
-- After the user uploads and reports the LB score: add `experiments.csv` row 006 (file, local, LB) and push.
-- Optional probe (one extra upload): `submissions/safe_v2_step7_s30_final_f_share.csv` = F with within-event shares
-  only; LB higher than F by ~0.004 would mean the evaluation set holds clicked events only (§16; probably not).
+**STATE 4 Nov 16:00 (read this first).**
+- Deadline: **midnight Dublin time** (= this PC's clock, UTC+0; the second PC's clock is UTC+2). LB best still
+  **0.821624** (005). The user (4 Nov 15:30): **no upload until something reaches LB 0.83**; keep searching, try
+  completely different approaches, ask them to send files to the GPU PC (Google Drive) when needed.
+- **Package G built and checked (15:50): `submissions/safe_v2_step7_s30_final_g.csv`** = best file. Held-out
+  0.808004 / 0.810281 (F 0.807880 / 0.810090), validation 0.809212 (F 0.809056), valid (529,390 rows), Spearman with F
+  0.99929; expected LB ≈ 0.8232. (F = previous best, `..._final_f.csv`.) If 0.83 is not reached, still recommend
+  uploading G before midnight as insurance. After any upload: `experiments.csv` row 006 and push.
+- Tests 4 Nov afternoon (§17): **the evaluation set is NOT clicked-events-only** (coverage of never-clicking users and
+  delay-vs-click-rate match "first event after the cutoff"; the `final_f_share.csv` probe would lose ~0.005, dropped).
+  Items shown-but-not-clicked to the same user earlier: click rate 0.055 vs 0.057 (no "future clicks as fillers" leak;
+  `shown_before` features exist anyway). Within-event order by rowid / item_id: uniform.
+- **Running: Mult-VAE taste model** (`research/techarena/mvae_model.py`, new): VAE over each user's known clicks,
+  softmax over all 50,000 items, linear decoder, SVD start; writes `cache/seq/mvae/seq_b1737676800.parquet` (validation)
+  and `seq_full_eval.parquet` (evaluation) for `final_blend.py --seq-extra mvae`. Second PC GPU, log there
+  `logs\mvae_val.log` (~2 s per epoch). Plan: if it adds ≥ +0.0001 held out on both halves on top of G → run `--mode
+  eval` there, fetch, `final_blend.py ... --seq-extra mvae --out submissions/safe_v2_step7_s30_final_h.csv`.
 - Main PC froze at 15:00 with the CPU MLP build + two blend scripts + a Google Drive upload: run one heavy job at a
   time here. The second PC: GitHub pull refused (deploy key), copy changed files by scp; its GPU does the MLPs
   (`--device cuda`). The Google Drive copy of the frames is also in
@@ -751,3 +748,43 @@ seed-weighted averages of the second PC's GPU runs, fetched as float32 arrays `n
 `nn_attn9.npy` in the validation row order, md5 4896fbe6…). Submission: `queues/lgb_exp13.bat` (GPU) then
 `queues/build_g.sh`. The 15:00 freeze stopped this PC's CPU fallback build of the attention MLP (`--tag
 _s30_attn1_lr2 --submit`); not needed while the GPU path works.
+
+## 17. 4 Nov late afternoon: package G built; is the evaluation set built differently?; a Mult-VAE taste model
+**Package G** (`queues/build_g.sh`, finished 15:50): held-out 0.808004 / 0.810281 (F 0.807880 / 0.810090), validation
+0.809212, checked valid → `submissions/safe_v2_step7_s30_final_g.csv`. The second PC's GPU built the 24-seed context
+MLP and 12-seed attention MLP submissions in 10 and 13 min (inner holdout chose 5 epochs for both; the context run's
+curve tracks this PC's CPU lr 2e-4 run within 5e-5 per epoch, so the flags are applied).
+
+**Clicked events only?** Label-free test (scratch `clicked_only_test.py`): if the evaluation set held only each user's
+first *clicked* event, users who never click would be missing and rare clickers' events would come later. Simulated in
+train at a day-4 cutoff:
+
+| | Evaluation set | Sim: first event | Sim: first clicked event |
+|---|---|---|---|
+| Coverage of users with 0 past clicks (3–5 / 6–10 past events) | 0.93 / 1.00 (others 0.95–0.97 / 1.00) | 0.88 / 0.95 | 0.66 / 0.70 |
+| Spearman(past click rate, delay to the target), within activity bins | −0.014 … +0.012 | +0.002 … +0.033 | −0.05 … −0.14 |
+
+→ the evaluation set is "each user's first event after the cutoff", clicked or not. The shares-only probe would lose.
+
+**Other quick leak checks (scratch `shown_before_test.py`):** a candidate shown but not clicked to the same user before
+is clicked at 0.0545 / 0.0437 (shown 1 / 2 times) vs 0.0568 never shown, so fillers are not drawn from future clicks;
+the clicked row's position after sorting an event by rowid or item_id is uniform (0.099–0.101).
+
+**Mult-VAE taste model** (`mvae_model.py`, new; second PC GPU, ~2 s per epoch; `queues/mvae_screen.bat`): a VAE over
+each user's set of known clicks with a softmax over all 50,000 items and a linear decoder (the generator's measured
+form), click-SVD start (inner which-AUC 0.7774 before training). It overfits within ~5 epochs whatever the
+regularisation; validation boundary which-AUC (choice model 0.781, 50-click sequence model 0.789, full-catalogue MF
+0.770):
+
+| Variant | Inner holdout (best, epoch 5) | Validation targets |
+|---|---|---|
+| base: dim 32, reconstruct all, beta 0.2, input dropout 0.5 (3 seeds) | 0.7790 | 0.7745 |
+| predict only the hidden clicks | 0.7782 | 0.7724 |
+| dim 12 / dim 12 + hidden only | 0.7791 / 0.7785 | 0.7735 / 0.7722 |
+| weight decay 1.0 | 0.7807 | 0.7722 |
+| beta 1.0 | 0.7799 | 0.7733 |
+| input dropout 0.8 + hidden only | 0.7789 | 0.7739 |
+
+In G's final blend as an extra which-component (`--seq-extra mvae`): held-out 0.807980 / 0.810269 vs G's 0.808004 /
+0.810281 (weight ≈ 0.005) → nothing. **Full-catalogue models (MF and VAE) lose to the slate-trained ones and add
+nothing to the blend: closed.**
