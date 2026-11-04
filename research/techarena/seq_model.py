@@ -48,6 +48,10 @@ Options beyond the original model:
   --save-inner  where the epoch search runs, also fit the other seeds on the inner fit and write the seed-averaged
               inner-holdout predictions (inner_<name>.parquet), so variants and their ensembles can be compared
               without touching validation.
+  --no-user   no free user vector (the user token stays as a zero vector + position): a user is only their history.
+              The inner AUC falls fast after epoch 1 (0.820 -> 0.816 -> 0.797), a sign of memorised per-user vectors.
+  --hist-drop P  while training, hide each history click with probability P (as padding), so the model cannot lean
+              on any single click and sees each event with a different history on every pass.
 """
 from __future__ import annotations
 
@@ -320,9 +324,11 @@ def svd_init(d: Events, b: int, n_users: int, n_items: int, rank: int = 11) -> n
 # ---------------------------------------------------------------- model
 class SeqModel(nn.Module):
     def __init__(self, n_users: int, n_items: int, dim: int, layers: int, heads: int, dropout: float,
-                 init: np.ndarray | None, skips: bool = False, n_hist: int = HIST, right_align: bool = False):
+                 init: np.ndarray | None, skips: bool = False, n_hist: int = HIST, right_align: bool = False,
+                 no_user: bool = False):
         super().__init__()
         self.right_align = right_align
+        self.no_user = no_user
         self.item = nn.Embedding(n_items + 1, dim, padding_idx=0)
         nn.init.normal_(self.item.weight, std=0.01)
         if init is not None:
@@ -361,6 +367,8 @@ class SeqModel(nn.Module):
         hist = b["hist"]
         n = hist.shape[0]
         e, u = self.item(hist), self.user(b["user"])
+        if self.no_user:
+            u = torch.zeros_like(u)
         # direct MF path: raw history average + user vector, so training starts from the SVD taste match
         q = e.sum(1) / (hist > 0).sum(1, keepdim=True).clamp(min=1) + u
         tok = e + self.age(b["age"])
@@ -431,7 +439,7 @@ def fit(args, d: Events, n_users: int, n_items: int, b: int, epochs: int, device
     n_rows = len(arrays["user"])
     model = SeqModel(n_users, n_items, args.dim, args.layers, args.heads, args.dropout,
                      svd_init(d, b, n_users, n_items) if args.svd_init else None, skips=args.skips > 0,
-                     n_hist=d.hist.shape[1], right_align=args.right_align).to(device)
+                     n_hist=d.hist.shape[1], right_align=args.right_align, no_user=args.no_user).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
     sched = None
     if args.sched == "cos":  # warmup, then cosine to 0 at the end of the last epoch
@@ -450,6 +458,9 @@ def fit(args, d: Events, n_users: int, n_items: int, b: int, epochs: int, device
         for s in range(0, n_rows, args.batch):
             bi = perm[s:s + args.batch]
             batch = {k: v[bi] for k, v in train.items()}
+            if args.hist_drop > 0:  # training only: random history clicks become padding
+                h = batch["hist"]
+                batch["hist"] = h.masked_fill(torch.rand(h.shape, device=h.device) < args.hist_drop, 0)
             logits = model(batch)
             if "pseudo" in batch:  # extra events have no no-click option: their loss covers the 10 candidates only
                 logits = torch.cat([logits[:, :1].masked_fill(batch["pseudo"][:, None], -1e9), logits[:, 1:]], 1)
@@ -573,6 +584,8 @@ def main(argv: list[str] | None = None, loaded: tuple | None = None) -> None:
     ap.add_argument("--right-align", action="store_true", help="position embeddings count back from the latest click")
     ap.add_argument("--save-inner", action="store_true",
                     help="write the seed-averaged inner-holdout predictions where the epoch search runs")
+    ap.add_argument("--no-user", action="store_true", help="no free user vector: a user is only their history")
+    ap.add_argument("--hist-drop", type=float, default=0.0, help="training: hide each history click with this probability")
     ap.add_argument("--fit-frac", type=float, default=1.0, help="<1 only for quick smoke tests")
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--log-every", type=int, default=0, help="print the running loss every N steps")
