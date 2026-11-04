@@ -641,3 +641,24 @@ the which part; checked on F, held-out halves vs F's 0.807880 / 0.810090): 100-c
 5 seeds) +0.00001 / −0.00001; bigger model (`seq_pair_c/big`) +0.00002 / +0.00002. The blend already has what the
 sequence models know. (For reference: the sequence model alone scores 0.797 on validation, F 0.809, so using it
 alone would be far worse.)
+
+**Known clicks, validation vs evaluation** (scratch `seg_known.py`: all of a user's known clicks before the
+boundary, up to 100; the data's `history_length` is capped at 20 and hides heavy users):
+
+| Known clicks | ≤2 | 3–5 | 6–10 | 11–20 | 21–30 | 31–50 | >50 | mean |
+|---|---|---|---|---|---|---|---|---|
+| validation targets | 6.0% | 11.5% | 20.5% | 26.9% | 23.8% | 10.1% | 1.1% | 16.6 |
+| evaluation targets | 6.0% | 11.7% | 19.4% | 25.6% | 16.8% | 16.9% | 3.6% | 18.9 |
+
+Evaluation has about twice as many 30+ users. Final-blend weights per known-clicks segment (2–4 bins, held out by user
+halves): −0.00001 to −0.00014, and the 50-click weight does not rise with known clicks, so nothing to adjust for that
+mix.
+
+**30 more sequence seeds** (`queues/seq_extra.bat` on the second PC: base seeds 100–109, EMA 0.99 seeds 200–209,
+100-click histories seeds 300–309; validation and evaluation boundaries only, ~1 h; folders
+`cache/seq/seqx_{base,ema,h100}`, merged `seqx_all`, and with the 30 old seeds `seqx_s60`): alone on validation base
+0.796348, EMA 0.794966 (its search chose 2 epochs), 100-click 0.796284; the new 30 together 0.797093; **60 seeds
+0.797289 vs 30 seeds 0.797228 (+0.00006)**: the sequence features are saturated in seeds.
+In F's final blend (held-out vs 0.807880 / 0.810090): 60-seed folder as the 50-click component 0.807879 / 0.810086
+(−0.000001 / −0.000004); the new 30 seeds as an extra component 0.807881 / 0.810087 (+0.000001 / −0.000003).
+**The sequence-model avenue is closed**: tuning, regularising, more seeds or more variants do not move F.
