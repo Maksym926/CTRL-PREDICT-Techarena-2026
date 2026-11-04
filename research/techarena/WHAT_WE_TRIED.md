@@ -485,3 +485,19 @@ validation); `--share-feats` 0.807325 (+0.00003, not used).
 Package E = C's binary + the tuned partner (`queues/queue_e.sh`: partner `--submit` with tree cap 4000, then
 `final_blend.py` → `submissions/safe_v2_step7_s30_final_e.csv`). The Optuna re-tune of the binary on step 7's frames
 (`optuna_step7.py`) runs on the second PC (optuna 5.0.0 had to be installed in its venv).
+
+**4 Nov 01:00 — the MLP stack (`nn_step7.py`) is the night's biggest gain.** Same 140 columns as the LightGBM models,
+rank-Gauss transformed; a shared MLP (140 → 256 → 128) scores each candidate, a pooled head the no-click option;
+event softmax over 11; epochs from the inner holdout (peak at 4: 0.812815, LightGBM's current parameters 0.812356 on
+the same holdout), 3 seeds. Validation **alone 0.807615** (binary 0.807295, tuned partner 0.807807). In the final blend
+(`final_blend.py --val-c`, now a probability model in both parts, whether weights by grid):
+
+| Final blend (held-out halves) | A | B |
+|---|---|---|
+| binary + tuned partner + sequence shares | 0.807147 | 0.809508 |
+| + MLP stack | **0.807880** | **0.810090** |
+
+i.e. about +0.0012 over package C's rank blend (whether: partner 0.7, MLP 0.3; which: MLP 0.43, partner 0.36, 50-click
+0.18, binary 0.12, 20-click −0.11). **Package F** = C's binary + tuned partner + MLP stack (`queues/queue_f.sh` →
+`submissions/safe_v2_step7_s30_final_f.csv`), built after package E on this PC. Second PC batch 3: MLP variants
+(512 wide / dropout 0.2; learning rate 5e-4), then Optuna on the partner's own parameters.
