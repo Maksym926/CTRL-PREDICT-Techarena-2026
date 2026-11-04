@@ -8,6 +8,7 @@ heavy-tailed counts and probabilities all look standard normal.
     candidate utility u_i = MLP(x_i)        no-click utility u_0 = MLP0([mean_i h_i, max_i h_i])
     P(click i) = softmax(u_0, u_1..u_10)_i
 --context: u_i = MLP([h_i, h_i - mean_j h_j, max_j h_j]) instead (the candidate sees the rest of its event).
+--binary: P(click i) = sigmoid(u_i), trained per candidate (the no-click head is unused).
 Validation averages --seeds fits (default 3); the submission the same.
 
 Usage (from the repo root):
@@ -42,6 +43,8 @@ ap.add_argument("--batch", type=int, default=1024, help="events per batch")
 ap.add_argument("--wd", type=float, default=1e-5, help="AdamW weight decay")
 ap.add_argument("--context", action="store_true",
                 help="candidate head also sees h_i - mean_j h_j and max_j h_j (the rest of its event)")
+ap.add_argument("--binary", action="store_true",
+                help="per-candidate logistic loss and sigmoid outputs instead of the event softmax")
 ap.add_argument("--threads", type=int, default=8)
 A = ap.parse_args()
 sys.argv = sys.argv[:1]
@@ -150,7 +153,8 @@ def predict(model: EventMLP, X: np.ndarray) -> np.ndarray:
     out = []
     with torch.no_grad():
         for i in range(0, len(X), 8192):
-            out.append(torch.softmax(model(torch.from_numpy(X[i:i + 8192])), 1)[:, 1:].numpy())
+            logits = model(torch.from_numpy(X[i:i + 8192]))
+            out.append((torch.sigmoid(logits[:, 1:]) if A.binary else torch.softmax(logits, 1)[:, 1:]).numpy())
     return np.concatenate(out).ravel()
 
 
@@ -167,7 +171,11 @@ def train(X: np.ndarray, y: np.ndarray, epochs: int, seed: int, hold=None):
         order = rng.permutation(len(X))
         for i in range(0, len(order), A.batch):
             idx = torch.from_numpy(order[i:i + A.batch])
-            loss = nn.functional.cross_entropy(model(Xt[idx]), yt[idx])
+            if A.binary:  # candidate i is clicked iff the event label is i + 1
+                target = (yt[idx][:, None] == torch.arange(1, 11)).float()
+                loss = nn.functional.binary_cross_entropy_with_logits(model(Xt[idx])[:, 1:], target)
+            else:
+                loss = nn.functional.cross_entropy(model(Xt[idx]), yt[idx])
             opt.zero_grad()
             loss.backward()
             opt.step()
