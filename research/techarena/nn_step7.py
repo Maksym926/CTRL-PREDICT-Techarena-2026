@@ -7,6 +7,7 @@ then a refit on all windows. Columns: rank-Gauss transform fitted on the trainin
 heavy-tailed counts and probabilities all look standard normal.
     candidate utility u_i = MLP(x_i)        no-click utility u_0 = MLP0([mean_i h_i, max_i h_i])
     P(click i) = softmax(u_0, u_1..u_10)_i
+--context: u_i = MLP([h_i, h_i - mean_j h_j, max_j h_j]) instead (the candidate sees the rest of its event).
 Validation averages --seeds fits (default 3); the submission the same.
 
 Usage (from the repo root):
@@ -37,6 +38,9 @@ ap.add_argument("--hidden", type=int, default=256)
 ap.add_argument("--dropout", type=float, default=0.1)
 ap.add_argument("--lr", type=float, default=1e-3)
 ap.add_argument("--batch", type=int, default=1024, help="events per batch")
+ap.add_argument("--wd", type=float, default=1e-5, help="AdamW weight decay")
+ap.add_argument("--context", action="store_true",
+                help="candidate head also sees h_i - mean_j h_j and max_j h_j (the rest of its event)")
 ap.add_argument("--threads", type=int, default=8)
 A = ap.parse_args()
 sys.argv = sys.argv[:1]
@@ -115,16 +119,22 @@ class RankGauss:
 
 
 class EventMLP(nn.Module):
-    def __init__(self, n_in: int, hidden: int, dropout: float):
+    def __init__(self, n_in: int, hidden: int, dropout: float, context: bool = False):
         super().__init__()
+        self.context = context
         self.body = nn.Sequential(nn.Linear(n_in, hidden), nn.GELU(), nn.Dropout(dropout),
                                   nn.Linear(hidden, hidden // 2), nn.GELU(), nn.Dropout(dropout))
-        self.cand = nn.Linear(hidden // 2, 1)
+        self.cand = (nn.Sequential(nn.Linear(3 * (hidden // 2), hidden // 2), nn.GELU(), nn.Linear(hidden // 2, 1))
+                     if context else nn.Linear(hidden // 2, 1))
         self.noclick = nn.Sequential(nn.Linear(hidden, hidden // 2), nn.GELU(), nn.Linear(hidden // 2, 1))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # x: events x 10 x features -> logits events x 11
         h = self.body(x)
-        u = self.cand(h).squeeze(-1)
+        if self.context:
+            u = self.cand(torch.cat([h, h - h.mean(1, keepdim=True), h.amax(1, keepdim=True).expand_as(h)], -1))
+        else:
+            u = self.cand(h)
+        u = u.squeeze(-1)
         u0 = self.noclick(torch.cat([h.mean(1), h.amax(1)], -1))
         return torch.cat([u0, u], 1)
 
@@ -147,8 +157,8 @@ def train(X: np.ndarray, y: np.ndarray, epochs: int, seed: int, hold=None):
     """X: events x 10 x features. Returns the model and the per-epoch holdout AUC curve (if hold)."""
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
-    model = EventMLP(X.shape[2], A.hidden, A.dropout)
-    opt = torch.optim.AdamW(model.parameters(), lr=A.lr, weight_decay=1e-5)
+    model = EventMLP(X.shape[2], A.hidden, A.dropout, A.context)
+    opt = torch.optim.AdamW(model.parameters(), lr=A.lr, weight_decay=A.wd)
     Xt, yt = torch.from_numpy(X), torch.from_numpy(y)
     curve = []
     for ep in range(epochs):
