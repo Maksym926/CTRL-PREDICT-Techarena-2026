@@ -501,3 +501,21 @@ i.e. about +0.0012 over package C's rank blend (whether: partner 0.7, MLP 0.3; w
 0.18, binary 0.12, 20-click −0.11). **Package F** = C's binary + tuned partner + MLP stack (`queues/queue_f.sh` →
 `submissions/safe_v2_step7_s30_final_f.csv`), built after package E on this PC. Second PC batch 3: MLP variants
 (512 wide / dropout 0.2; learning rate 5e-4), then Optuna on the partner's own parameters.
+
+**4 Nov 02:45–03:30: batch 3 results and blend checks** (validation; F's final blend held-out 0.807880 / 0.810090):
+
+| Test | Result |
+|---|---|
+| MLP 512 wide, dropout 0.2 | alone 0.807646 (3 epochs; inner 0.812690) |
+| MLP learning rate 5e-4 (16 epochs max) | alone 0.807653 (4 epochs; inner 0.813276) |
+| The three MLPs averaged (9 fits, correlation 0.995–0.997) as the final blend's third model | held-out +0.00002 / +0.00003 over one MLP (rule +0.0001): the extra submissions are not built |
+| Optuna on the partner's own parameters (`optuna_softmax_step7.py`, 15 trials) | inner +0.00006; partner alone 0.807505 (step 4's parameters 0.807807): rejected |
+| Optuna on the binary (`optuna_step7.py`, 45 trials, batch 2) | inner +0.00036, validation 0.807358 (+0.00006); partner with those parameters 0.807533: rejected |
+| Conditional-logit weights per segment (3 or 5 bins of known clicks; 3 bins of gap) | held-out −0.00011 to +0.00003: no (the binary/partner weights just trade off) |
+| Package F's blend under Monish's eval-reweighting | 0.812795 (C rank blend 0.811507, C final blend 0.811867): the gain holds for an eval-like mix |
+
+The inner holdout is a poor judge of LightGBM parameters now (both Optuna runs gained there and not on validation);
+step 4's tuned parameters stay. New `nn_step7.py` options: `--context` (the candidate head also sees
+h_i − mean_j h_j and max_j h_j, i.e. the rest of its event; default path unchanged, checked bit-identical) and `--wd`.
+Second PC batch 4 (`D:\HuaweiTechArena\lgb_exp4.bat`): context MLP at learning rates 1e-3 and 5e-4, MLP 512 /
+dropout 0.3 / 5e-4.
