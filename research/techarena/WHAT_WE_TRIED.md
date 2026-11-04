@@ -813,3 +813,35 @@ nothing to the blend: closed.**
 Where the error is (validation, clicked events): the real item is new in 26,586 events, a repeat in 3,569. Which-AUC
 of the real new item vs the non-history fillers 0.783 (binary), vs all candidates 0.771: history fillers outranking
 real new items cost ~0.012 which-AUC on 88% of clicked events, and only taste separates them.
+
+**MLP stack with piecewise-linear input encoding** (`nn_step7.py --ple 16`, Gorishniy et al. 2022; batch 14, 3 seeds,
+validation alone vs the same type without it): plain 0.807152 (0.807615), context lr 2e-4 0.806611 (0.807954),
+attention lr 2e-4 0.807225 (0.807753). In G's third model (scratch `h_choice.py`, held-out vs G 0.808004 / 0.810281):
++ plain −0.00006 / −0.00002, + context −0.00004 / +0.00004, + attention −0.00004 / +0.00002, + all three −0.00016 /
+−0.00003 → closed.
+
+**Window-aware MLP** (`nn_step7.py --window-day`, batch 15, context lr 2e-4, 3 seeds, validation alone; plain
+0.807954): `--window-day` **0.808138 (+0.00018)**, `--window-weight 1` 0.807865, both 0.808092. Batch 17 (wday
+context seeds 3–23, wday attention ×12) and the partner `softmax_step7.py --window-day` validation started 17:10
+(a broken wait loop left the GPU idle 16:36–17:10).
+Partner with `softmax_step7.py --window-day` (validation): alone 0.807727 vs 0.807807 without (1729 vs 1928 trees) → the
+window-day input helps the MLP only. Day-6 validation (window 6.0 of the submission frames, 35,138 events = users active
+in the 24 h after day 6, so a heavier-user mix than the evaluation): binary 0.831233, partner 0.831668.
+Also negative (4 Nov 17:20): evaluation file row order (G's top pick at stored position p: 9.7–10.3% for every p;
+the train click is uniform over stored positions too), evaluation.csv has no extra columns; train timestamps at minute
+level (minute of hour, parity, mod 5/7/10, gaps mod k: chi²/df ≈ 1) → no timing leak.
+
+**Window-day MLPs at full seed counts (batch 17, scratch `h2_choice.py`):** alone, context 24 seeds wday 0.808298 vs
+plain 0.808248 (+0.00005; the 3-seed +0.00018 was mostly seed noise), attention 12 seeds wday 0.808188 vs 0.808107. In
+the final blend (held-out vs G 0.808004 / 0.810281): G-wday (both types wday) +0.00003 / −0.00002; wday context + plain
+attention +0.00001 / −0.00002; G + wday context +0.00000 / −0.00001; G + both wday +0.00001 / +0.00000 → below the
++0.0001 rule: **package H not built**. (Its submission MLPs `safe_v2_step7_nn_s30_ctx_lr2_wday_s24.csv` /
+`..._attn1_lr2_wday_s12.csv` exist on the second PC; unused.)
+
+**Global pairwise AUC loss** (`nn_step7.py --auc-loss W`: event-softmax loss + W × RankNet loss over every
+clicked/non-clicked row pair of the batch, across events; batch 19, wday context, 3 seeds; reference 0.808138):
+W = 1.0 0.808150, W = 0.3 0.808133 → nothing (the event-softmax models are already calibrated for global AUC).
+
+**Deep-history candidates** (clicked by the user before, but older than the last-20 history; 0.07% of train rows,
+click rate 0.279 like last-20 items 0.293): already handled (validation: predicted 0.24–0.25 vs actual 0.236; when real,
+mean within-event rank 1.21, last-20 items 1.20) via `clicked_before` and the 50-click sequence features.

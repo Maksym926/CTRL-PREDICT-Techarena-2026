@@ -59,6 +59,9 @@ ap.add_argument("--ple-dim", type=int, default=8)
 ap.add_argument("--window-day", action="store_true",
                 help="extra input: the boundary of the row's window in days (targets: their own boundary), so the stack "
                      "can tell taste features fitted on little data (early windows) from late ones")
+ap.add_argument("--auc-loss", type=float, default=0.0,
+                help="add W x a global pairwise (RankNet) loss over every clicked/non-clicked row pair of the batch, "
+                     "across events (the leaderboard's global AUC), on log P(click i); 0 = off")
 ap.add_argument("--window-weight", type=float, default=0.0,
                 help="weight each training event by ((window_id + 1) / n_windows) ** W (0 = unweighted)")
 ap.add_argument("--device", default="cpu", help="cpu or cuda (batches are moved to the device one at a time)")
@@ -224,6 +227,14 @@ def train(X: np.ndarray, y: np.ndarray, epochs: int, seed: int, hold=None, w: np
             elif wt is not None:
                 wb = wt[idx].to(DEV)
                 loss = (nn.functional.cross_entropy(model(xb), yb, reduction="none") * wb).sum() / wb.sum()
+            elif A.auc_loss:
+                logits = model(xb)
+                loss = nn.functional.cross_entropy(logits, yb)
+                s = torch.log_softmax(logits, 1)[:, 1:].flatten()  # log P(click on candidate i), comparable across events
+                t = (yb[:, None] == torch.arange(1, 11, device=DEV)).flatten()
+                pos, neg = s[t], s[~t]
+                if len(pos):
+                    loss = loss + A.auc_loss * nn.functional.softplus(neg[None, :] - pos[:, None]).mean()
             else:
                 loss = nn.functional.cross_entropy(model(xb), yb)
             opt.zero_grad()

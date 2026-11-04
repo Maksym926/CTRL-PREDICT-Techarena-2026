@@ -5,6 +5,13 @@ cd /d D:\HuaweiTechArena\CTRL-PREDICT-Techarena-2026
 set PYTHONIOENCODING=utf-8
 set PY=.venv\Scripts\python.exe
 set NN=research\techarena\nn_step7.py --seq stage3_h50_s30 --threads 2 --device cuda --window-day
+echo [%date% %time%] batch 18 waits for the partner --window-day validation (memory: one big job) >> logs\gpu_exp.log
+:waitp
+findstr /C:"minutes:" /C:"Traceback" logs\softmax_wday_val.log >nul 2>&1
+if errorlevel 1 (
+  ping -n 31 127.0.0.1 >nul
+  goto waitp
+)
 echo [%date% %time%] batch 18 (GPU) start >> logs\gpu_exp.log
 call :run ctx_lr2_wday_s24 --context --lr 0.0002 --max-epochs 30 --patience 5 --seeds 24 --submit
 call :run attn1_lr2_wday_s12 --attn 1 --lr 0.0002 --max-epochs 30 --patience 4 --seeds 12 --submit
