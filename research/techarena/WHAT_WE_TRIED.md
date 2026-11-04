@@ -537,5 +537,14 @@ variance), so F keeps the base MLP. Also: fitting the blend parameters under the
 conditional logit + weighted AUC grid) changes held-out eval-reweighted AUC by −0.00001 / +0.00002 (nothing). The
 cell table shows the one gap validation cannot cover: 9.4% of evaluation events have a 3–7 day gap, none of the
 validation events (its period after the cutoff is shorter, gaps ≤ 72 h); the submission models' training frame has 4.0%
-such targets (`step5_full_train`, max 156 h; validation's training frame 0.5%). Batches 5–6 on the second PC: context MLP with new seeds / lr 3e-4 / 512 wide, then `--binary` (per-candidate
-logistic loss) at two learning rates, as a more different third model.
+such targets (`step5_full_train`, max 156 h; validation's training frame 0.5%). Batches 5–6 on the second PC:
+context MLP with new seeds / lr 3e-4 / 512 wide, then `--binary` (per-candidate logistic loss) at two learning rates,
+as a more different third model.
+
+Batch 5 (04:00–04:40): context MLP lr 5e-4 with refit seeds 3–5 (`--seed-offset 3`) 0.807792 (seeds 0–2: 0.807872, so
+seed noise ≈ ±0.00004 and the context MLP is ≈ +0.0002 better alone than the base MLP); context MLP lr 3e-4
+(6 epochs) **0.807948 alone**, in the final blend +0.00002 / +0.00007 held out, averaged with the base MLP +0.00005 /
++0.00006: still below the +0.0001 rule, not built. Both MLPs as separate which-components (instead of an average):
++0.00004 / +0.00002. **Package E built 04:19**: `submissions/safe_v2_step7_s30_final_e.csv` (C's binary + tuned partner,
+final blend: validation 0.808377 in-sample, held-out 0.807136 / 0.809499, checked valid; partner submission 2602 trees
+× 3 seeds, 197 min).
