@@ -33,6 +33,8 @@ from torch import nn
 ap = argparse.ArgumentParser()
 ap.add_argument("--seq", default="stage3_h50_s30", help="folder under cache/seq with the 50-click features")
 ap.add_argument("--submit", action="store_true")
+ap.add_argument("--val6", action="store_true", help="validation at day 6 from the submission frames (windows 0.5-5.5, "
+                                                    "targets before day 6 -> window 6.0): nn_step7<tag>_val6.parquet")
 ap.add_argument("--tag", default="", help="suffix for the output names")
 ap.add_argument("--swap", nargs="*", default=[], help="prefix=folder: as safe_v2_step7.py --swap")
 ap.add_argument("--seeds", type=int, default=3)
@@ -50,6 +52,15 @@ ap.add_argument("--context", action="store_true",
 ap.add_argument("--binary", action="store_true",
                 help="per-candidate logistic loss and sigmoid outputs instead of the event softmax")
 ap.add_argument("--attn", type=int, default=0, help="self-attention layers over the 10 candidates (0 = none)")
+ap.add_argument("--ple", type=int, default=0,
+                help="piecewise-linear encoding of every input with N quantile bins (Gorishniy et al. 2022), fed to the "
+                     "body through a per-feature linear map to --ple-dim values each (0 = off, plain rank-Gauss inputs)")
+ap.add_argument("--ple-dim", type=int, default=8)
+ap.add_argument("--window-day", action="store_true",
+                help="extra input: the boundary of the row's window in days (targets: their own boundary), so the stack "
+                     "can tell taste features fitted on little data (early windows) from late ones")
+ap.add_argument("--window-weight", type=float, default=0.0,
+                help="weight each training event by ((window_id + 1) / n_windows) ** W (0 = unweighted)")
 ap.add_argument("--device", default="cpu", help="cpu or cuda (batches are moved to the device one at a time)")
 ap.add_argument("--threads", type=int, default=8)
 A = ap.parse_args()
@@ -129,11 +140,32 @@ class RankGauss:
         return out
 
 
+class PLE(nn.Module):
+    """Piecewise-linear encoding of rank-Gauss inputs: per feature, bins with edges at standard-normal quantiles;
+    x -> (clip((x - lo_t) / (hi_t - lo_t), 0, 1))_t, then a per-feature linear map to `dim` values (+ GELU)."""
+
+    def __init__(self, n_in: int, bins: int, dim: int):
+        super().__init__()
+        e = torch.as_tensor(ndtri(np.clip(np.linspace(0, 1, bins + 1), 0.0005, 0.9995)), dtype=torch.float32)
+        self.register_buffer("lo", e[:-1])
+        self.register_buffer("width", (e[1:] - e[:-1]).clamp(min=1e-3))
+        self.w = nn.Parameter(torch.randn(n_in, bins, dim) / np.sqrt(bins))
+        self.b = nn.Parameter(torch.zeros(n_in, dim))
+        self.out_dim = n_in * dim
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # ... x n_in -> ... x (n_in * dim)
+        enc = ((x[..., None] - self.lo) / self.width).clamp(0, 1)  # ... x n_in x bins
+        h = torch.einsum("...fb,fbd->...fd", enc, self.w) + self.b
+        return nn.functional.gelu(h).flatten(-2)
+
+
 class EventMLP(nn.Module):
     def __init__(self, n_in: int, hidden: int, dropout: float, context: bool = False, attn: int = 0):
         super().__init__()
         self.context = context
-        self.body = nn.Sequential(nn.Linear(n_in, hidden), nn.GELU(), nn.Dropout(dropout),
+        self.ple = PLE(n_in, A.ple, A.ple_dim) if A.ple else None
+        body_in = self.ple.out_dim if A.ple else n_in
+        self.body = nn.Sequential(nn.Linear(body_in, hidden), nn.GELU(), nn.Dropout(dropout),
                                   nn.Linear(hidden, hidden // 2), nn.GELU(), nn.Dropout(dropout))
         self.cand = (nn.Sequential(nn.Linear(3 * (hidden // 2), hidden // 2), nn.GELU(), nn.Linear(hidden // 2, 1))
                      if context else nn.Linear(hidden // 2, 1))
@@ -143,7 +175,7 @@ class EventMLP(nn.Module):
             enable_nested_tensor=False) if attn else None)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # x: events x 10 x features -> logits events x 11
-        h = self.body(x)
+        h = self.body(self.ple(x) if self.ple is not None else x)
         if self.attn is not None:
             h = self.attn(h)
         if self.context:
@@ -170,13 +202,15 @@ def predict(model: EventMLP, X: np.ndarray) -> np.ndarray:
     return np.concatenate(out).ravel()
 
 
-def train(X: np.ndarray, y: np.ndarray, epochs: int, seed: int, hold=None):
-    """X: events x 10 x features. Returns the model and the per-epoch holdout AUC curve (if hold)."""
+def train(X: np.ndarray, y: np.ndarray, epochs: int, seed: int, hold=None, w: np.ndarray | None = None):
+    """X: events x 10 x features. Returns the model and the per-epoch holdout AUC curve (if hold).
+    w: optional per-event loss weights (--window-weight)."""
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     model = EventMLP(X.shape[2], A.hidden, A.dropout, A.context, A.attn).to(DEV)
     opt = torch.optim.AdamW(model.parameters(), lr=A.lr, weight_decay=A.wd)
     Xt, yt = torch.from_numpy(X), torch.from_numpy(y)
+    wt = torch.from_numpy(w.astype(np.float32)) if w is not None else None
     curve = []
     for ep in range(epochs):
         model.train()
@@ -187,6 +221,9 @@ def train(X: np.ndarray, y: np.ndarray, epochs: int, seed: int, hold=None):
             if A.binary:  # candidate i is clicked iff the event label is i + 1
                 target = (yb[:, None] == torch.arange(1, 11, device=DEV)).float()
                 loss = nn.functional.binary_cross_entropy_with_logits(model(xb)[:, 1:], target)
+            elif wt is not None:
+                wb = wt[idx].to(DEV)
+                loss = (nn.functional.cross_entropy(model(xb), yb, reduction="none") * wb).sum() / wb.sum()
             else:
                 loss = nn.functional.cross_entropy(model(xb), yb)
             opt.zero_grad()
@@ -201,31 +238,41 @@ def train(X: np.ndarray, y: np.ndarray, epochs: int, seed: int, hold=None):
     return model, curve
 
 
-def run(tr: pd.DataFrame, target: pd.DataFrame, bounds: list[int]) -> tuple[np.ndarray, dict]:
+def run(tr: pd.DataFrame, target: pd.DataFrame, bounds: list[int], target_b: int | None = None) -> tuple[np.ndarray, dict]:
     cols = lf.model_columns(tr)
     assert set(NEW) <= set(cols)
     last = len(bounds) - 1
     inner = ((tr["window_id"] < last) & (tr["timestamp"] < bounds[last])).to_numpy()
     hold = (tr["window_id"] == last).to_numpy()
     raw = tr[cols].to_numpy(np.float32)
+    raw_t = target[cols].to_numpy(np.float32)
+    if A.window_day:  # boundary of each row's window in days; the targets' own boundary for them
+        wd = (np.asarray(bounds, np.float64)[tr["window_id"].to_numpy()] - bounds[0]) / 86400.0
+        raw = np.concatenate([raw, wd[:, None].astype(np.float32)], 1)
+        raw_t = np.concatenate([raw_t, np.full((len(raw_t), 1), (target_b - bounds[0]) / 86400.0, np.float32)], 1)
+    n_f = raw.shape[1]
+    w_all = None
+    if A.window_weight:
+        w_all = ((tr["window_id"].to_numpy().reshape(-1, 10)[:, 0] + 1) / len(bounds)) ** A.window_weight
     y_all = labels(tr)
     ev_inner, ev_hold = inner.reshape(-1, 10)[:, 0], hold.reshape(-1, 10)[:, 0]
     rg = RankGauss().fit(raw[inner])
-    Xi = rg.transform(raw[inner]).reshape(-1, 10, len(cols))
-    Xh = rg.transform(raw[hold]).reshape(-1, 10, len(cols))
+    Xi = rg.transform(raw[inner]).reshape(-1, 10, n_f)
+    Xh = rg.transform(raw[hold]).reshape(-1, 10, n_f)
     yh = tr["label"].to_numpy()[hold]
-    lf.log(f"NN: {len(cols)} features, inner {ev_inner.sum():,} / holdout {ev_hold.sum():,} events")
-    _, curve = train(Xi, y_all[ev_inner], A.max_epochs, lf.FULL_SEEDS[0], hold=(Xh, yh))
+    lf.log(f"NN: {n_f} features, inner {ev_inner.sum():,} / holdout {ev_hold.sum():,} events")
+    _, curve = train(Xi, y_all[ev_inner], A.max_epochs, lf.FULL_SEEDS[0], hold=(Xh, yh),
+                     w=w_all[ev_inner] if w_all is not None else None)
     epochs = int(np.argmax(curve)) + 1
     lf.log(f"NN: inner holdout chose {epochs} epochs (AUC {max(curve):.6f})")
     del Xi, Xh
     rg = RankGauss().fit(raw)
-    X = rg.transform(raw).reshape(-1, 10, len(cols))
-    Xt = rg.transform(target[cols].to_numpy(np.float32)).reshape(-1, 10, len(cols))
+    X = rg.transform(raw).reshape(-1, 10, n_f)
+    Xt = rg.transform(raw_t).reshape(-1, 10, n_f)
     del raw
     preds = []
     for k in range(A.seeds):
-        model, _ = train(X, y_all, epochs, lf.FULL_SEEDS[0] + 101 * (k + A.seed_offset))
+        model, _ = train(X, y_all, epochs, lf.FULL_SEEDS[0] + 101 * (k + A.seed_offset), w=w_all)
         preds.append(predict(model, Xt))
         lf.log(f"  NN seed {k} done")
     return np.mean(preds, axis=0), {"epochs": epochs, "inner_curve": curve, "features": len(cols)}
@@ -236,7 +283,7 @@ def validate() -> None:
     split = make_split(lf.VAL_DAY)
     bounds = lf.bounds_for(lf.VAL_DAY, half=True)
     tr, va = load("step6_train", bounds), load("step6_val", bounds, f"b{split.cutoff_ts}")
-    p, info = run(tr, va, bounds)
+    p, info = run(tr, va, bounds, split.cutoff_ts)
     pd.DataFrame({"rowid": va["rowid"].astype(str), "predicted_probability": p}).to_parquet(
         f"data/validation/nn_step7{A.tag}_val_c4.parquet", index=False)
     y = va["label"].to_numpy()
@@ -250,11 +297,27 @@ def submit() -> None:
     t0 = time.perf_counter()
     bounds = lf.bounds_for(7, half=True)
     tr, te = load("step5_full_train", bounds), load("step5_full_test", bounds, "full_eval")
-    p, info = run(tr, te, bounds)
+    p, info = run(tr, te, bounds, lf.CUT)
     out = lf.REPO / "submissions" / f"safe_v2_step7_nn{A.tag}.csv"
     pd.DataFrame({"rowid": te["rowid"].astype(str), "predicted_probability": p}).to_csv(out, index=False)
     lf.log(f"wrote {out} ({info['epochs']} epochs, {(time.perf_counter() - t0) / 60:.1f} min)")
 
 
+def validate6() -> None:
+    """Day-6 validation (see safe_v2_step7.py --val6)."""
+    t0 = time.perf_counter()
+    bounds7 = lf.bounds_for(7, half=True)
+    b6 = bounds7[11]
+    full = load("step5_full_train", bounds7)
+    va = full[full["window_id"] == 11].reset_index(drop=True)
+    tr = full[(full["window_id"] < 11) & (full["timestamp"] < b6)].reset_index(drop=True)
+    del full
+    p, info = run(tr, va, bounds7[:11], b6)
+    pd.DataFrame({"rowid": va["rowid"].astype(str), "predicted_probability": p}).to_parquet(
+        f"data/validation/nn_step7{A.tag}_val6.parquet", index=False)
+    lf.log(f"NN DAY-6 VALIDATION nn_step7{A.tag}: AUC {roc_auc_score(va['label'].to_numpy(), p):.6f} "
+           f"({info['epochs']} epochs, {(time.perf_counter() - t0) / 60:.1f} min)")
+
+
 if __name__ == "__main__":
-    submit() if A.submit else validate()
+    validate6() if A.val6 else submit() if A.submit else validate()

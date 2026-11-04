@@ -29,6 +29,11 @@ ap.add_argument("--seq", default="stage3_h50", help="folder under cache/seq with
 ap.add_argument("--binary", default="data/validation/safe_v2_step7_val_c4.parquet",
                 help="validation predictions of the binary model to blend with")
 ap.add_argument("--submit", action="store_true")
+ap.add_argument("--val6", action="store_true", help="validation at day 6 from the submission frames (one fit, as the "
+                                                    "day-4 validation): data/validation/softmax_step7<tag>_val6.parquet")
+ap.add_argument("--window-day", action="store_true",
+                help="extra feature: the row's window boundary in days (targets: their own boundary), as nn_step7.py "
+                     "--window-day (4 Nov: +0.00018 alone for the context MLP)")
 ap.add_argument("--threads", type=int, default=-1)
 ap.add_argument("--tag", default="", help="suffix for the output names")
 ap.add_argument("--swap", nargs="*", default=[], help="prefix=folder: the folder under cache/ (cmf_seeds.py --merge, "
@@ -92,6 +97,14 @@ def load(name: str, bounds: list[int], target: str | None = None) -> pd.DataFram
     return f
 
 
+def add_wday(tr: pd.DataFrame, target: pd.DataFrame, bounds: list[int], target_b: int):
+    """--window-day: window boundary in days since the first window (training rows) / the targets' boundary."""
+    if not A.window_day:
+        return tr, target
+    wd = (np.asarray(bounds, np.float64)[tr["window_id"].to_numpy()] - bounds[0]) / 86400.0
+    return tr.assign(window_day=wd), target.assign(window_day=(target_b - bounds[0]) / 86400.0)
+
+
 def inner_trees(tr: pd.DataFrame, bounds: list[int], cols: list[str]) -> int:
     last = len(bounds) - 1
     inner = (tr["window_id"] < last) & (tr["timestamp"] < bounds[last])
@@ -110,6 +123,7 @@ def validate() -> None:
     split = make_split(lf.VAL_DAY)
     bounds = lf.bounds_for(lf.VAL_DAY, half=True)
     tr, va = load("step6_train", bounds), load("step6_val", bounds, f"b{split.cutoff_ts}")
+    tr, va = add_wday(tr, va, bounds, split.cutoff_ts)
     cols = lf.model_columns(tr)
     assert set(NEW) <= set(cols)
     n_trees = inner_trees(tr, bounds, cols)
@@ -143,6 +157,7 @@ def submit() -> None:
     t0 = time.perf_counter()
     bounds = lf.bounds_for(7, half=True)
     tr, te = load("step5_full_train", bounds), load("step5_full_test", bounds, "full_eval")
+    tr, te = add_wday(tr, te, bounds, lf.CUT)
     cols = lf.model_columns(tr)
     assert set(NEW) <= set(cols)
     n_trees = inner_trees(tr, bounds, cols)
@@ -161,5 +176,27 @@ def submit() -> None:
     lf.log(f"wrote {out} ({n_trees} trees, {(time.perf_counter() - t0) / 60:.1f} min)")
 
 
+def validate6() -> None:
+    """Day-6 validation (see safe_v2_step7.py --val6): train on windows 0-10 (targets before day 6), score window 11."""
+    from sklearn.metrics import roc_auc_score
+    t0 = time.perf_counter()
+    bounds7 = lf.bounds_for(7, half=True)
+    b6 = bounds7[11]
+    full = load("step5_full_train", bounds7)
+    va = full[full["window_id"] == 11].reset_index(drop=True)
+    tr = full[(full["window_id"] < 11) & (full["timestamp"] < b6)].reset_index(drop=True)
+    del full
+    tr, va = add_wday(tr, va, bounds7[:11], b6)
+    cols = lf.model_columns(tr)
+    n_trees = inner_trees(tr, bounds7[:11], cols)
+    lf.log(f"softmax day-6: inner holdout chose {n_trees} trees ({len(tr):,} training rows, {len(cols)} features)")
+    b = so.fit("softmax", tr[cols].to_numpy(np.float32), tr["label"].to_numpy(np.float64), n_trees)
+    p = so.predict("softmax", b, va[cols].to_numpy(np.float32))
+    pd.DataFrame({"rowid": va["rowid"].astype(str), "predicted_probability": p}).to_parquet(
+        f"data/validation/softmax_step7{A.tag}_val6.parquet", index=False)
+    lf.log(f"DAY-6 VALIDATION softmax_step7{A.tag}: AUC {roc_auc_score(va['label'].to_numpy(), p):.6f} "
+           f"({(time.perf_counter() - t0) / 60:.1f} min)")
+
+
 if __name__ == "__main__":
-    submit() if A.submit else validate()
+    validate6() if A.val6 else submit() if A.submit else validate()

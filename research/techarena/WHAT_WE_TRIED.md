@@ -16,11 +16,22 @@
   delay-vs-click-rate match "first event after the cutoff"; the `final_f_share.csv` probe would lose ~0.005, dropped).
   Items shown-but-not-clicked to the same user earlier: click rate 0.055 vs 0.057 (no "future clicks as fillers" leak;
   `shown_before` features exist anyway). Within-event order by rowid / item_id: uniform.
-- **Running: Mult-VAE taste model** (`research/techarena/mvae_model.py`, new): VAE over each user's known clicks,
-  softmax over all 50,000 items, linear decoder, SVD start; writes `cache/seq/mvae/seq_b1737676800.parquet` (validation)
-  and `seq_full_eval.parquet` (evaluation) for `final_blend.py --seq-extra mvae`. Second PC GPU, log there
-  `logs\mvae_val.log` (~2 s per epoch). Plan: if it adds ≥ +0.0001 held out on both halves on top of G → run `--mode
-  eval` there, fetch, `final_blend.py ... --seq-extra mvae --out submissions/safe_v2_step7_s30_final_h.csv`.
+- Mult-VAE, PLE-encoded MLPs, gap/cold-item/history-filler probes: no gain (§17).
+- **Lead 16:40: `nn_step7.py --window-day`** (the row's window boundary in days as an input; targets get their own
+  boundary, so at day 7 the stack behaves like its latest, most data-rich window): context MLP lr 2e-4, 3 seeds
+  0.808138 alone vs 0.807954 plain (+0.00018); `--window-weight 1` −0.00009, both +0.00014. Running: second PC
+  `lgb_exp17.bat` (validation: wday context seeds 3–23 + wday attention ×12) → scratch `h2_choice.py` (G vs G-wday
+  mixes, rule ≥ +0.0001 both halves) and `lgb_exp18.bat` (the two wday MLP submissions, fetched to `submissions/`);
+  then the partner with `softmax_step7.py --window-day --tag _s30_opt4_wday` (validation, second PC CPU). If the
+  MLP mix passes: `weighted_avg.py` (2 × ctx_lr2_wday_s24 + attn1_lr2_wday_s12) → `final_blend.py --val-c/--sub-c` →
+  `submissions/safe_v2_step7_s30_final_h.csv`.
+- **Running 16:25 (day-6 validation, §17):** is G's blend (weights fitted at day 4) still right at a later boundary?
+  New `--val6` mode in `safe_v2_step7.py`, `softmax_step7.py`, `nn_step7.py`: train on the submission frames' windows
+  0.5–5.5 (targets before day 6), score window 6.0 → `data/validation/*_val6.parquet`. Jobs: binary on the second
+  PC's CPU (log there `logs\lgb_val6.log`), partner here (`logs/softmax_step7_s30_opt4_val6.log`, ~70 min), MLPs
+  (context ×24, attention ×12) on the second PC's GPU = `D:\HuaweiTechArena\lgb_exp16.bat` after batch 15
+  (`--window-day` / `--window-weight` MLP test). Then the scratch `blend6.py` (copy in this session's scratchpad):
+  rule = day-6-fitted weights ≥ +0.0002 over G's on both day-6 halves → refit the blend on day 4 + day 6 pooled.
 - Main PC froze at 15:00 with the CPU MLP build + two blend scripts + a Google Drive upload: run one heavy job at a
   time here. The second PC: GitHub pull refused (deploy key), copy changed files by scp; its GPU does the MLPs
   (`--device cuda`). The Google Drive copy of the frames is also in
@@ -788,3 +799,17 @@ regularisation; validation boundary which-AUC (choice model 0.781, 50-click sequ
 In G's final blend as an extra which-component (`--seq-extra mvae`): held-out 0.807980 / 0.810269 vs G's 0.808004 /
 0.810281 (weight ≈ 0.005) → nothing. **Full-catalogue models (MF and VAE) lose to the slate-trained ones and add
 nothing to the blend: closed.**
+
+**More "something else" probes, 4 Nov 16:00–16:20 (all negative; scratch scripts `gap_repeat_test.py`,
+`gap_mass_test.py`, `hist_filler_probe.py`):**
+
+| Hypothesis | Finding |
+|---|---|
+| Long gaps (32% of eval events are > 72 h after the last click, few in validation) are mis-scored at evaluation | Re-clicks follow history position, not elapsed time (event-level re-click rate 0.077 / 0.077 / 0.074 / 0.076 by gap). The components are calibrated by gap on validation (> 120 h: actual 0.598, binary 0.587, partner 0.587, MLP +0.04 everywhere), and their evaluation masses fall with the gap the same way (users with ~3 train events, shrunk to ~0.60). G's file is a rank transform, so its event rank-sums are not masses. |
+| Items in evaluation slates never seen in train | None: every evaluation item was a train candidate; first-ever showings click at 0.060 vs 0.063 |
+| Mult-VAE useful on new items only | No: which-AUC real new item vs non-history fillers 0.760 (seq50 0.775, binary 0.783, MLP mix 0.783) |
+| Hidden structure separating real re-clicks from history fillers | In-history candidates (177,575, 29% real): position, count, history length/distinct, in-history candidates per event, user rate → 2-fold AUC 0.583; + events since the item's last click (incl. no-click events), position among distinct items, oldest position 0.583; + age (h), gaps, hour 0.584; + times shown unclicked since the last click 0.587. The stack reaches ~0.68 only through taste, so this pot (oracle +0.012) is taste-limited |
+
+Where the error is (validation, clicked events): the real item is new in 26,586 events, a repeat in 3,569. Which-AUC
+of the real new item vs the non-history fillers 0.783 (binary), vs all candidates 0.771: history fillers outranking
+real new items cost ~0.012 which-AUC on 88% of clicked events, and only taste separates them.

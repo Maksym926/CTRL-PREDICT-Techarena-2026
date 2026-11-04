@@ -27,6 +27,9 @@ import pandas as pd
 ap = argparse.ArgumentParser()
 ap.add_argument("--baseline", action="store_true", help="no new columns: checks the frames reproduce step 5")
 ap.add_argument("--submit", action="store_true")
+ap.add_argument("--val6", action="store_true", help="validation at day 6 from the submission frames: train on the "
+                                                    "windows 0.5-5.5 (targets before day 6), score window 6.0 -> "
+                                                    "data/validation/<name>_val6.parquet")
 ap.add_argument("--seq", default="stage3_h50", help="folder under cache/seq with the 50-click features")
 ap.add_argument("--tag", default="", help="suffix for the output names (needed with another --seq)")
 ap.add_argument("--extra", default="", help="another folder under cache/seq whose per-boundary files (rowid + "
@@ -174,5 +177,28 @@ def submit() -> None:
     lf.log(f"wrote {out} ({n_trees} trees, {(time.perf_counter() - t0) / 60:.1f} min)")
 
 
+def validate6() -> None:
+    """Day-6 validation (4 Nov): the evaluation sits at day 7, where every taste feature comes from models fitted on
+    7 days; day 4 is far from that. Window 11 of the submission frames (each user's first event after day 6, features
+    from data before day 6) is scored by a model trained on windows 0-10 with targets dated before day 6."""
+    from sklearn.metrics import roc_auc_score
+    t0 = time.perf_counter()
+    bounds7 = lf.bounds_for(7, half=True)
+    b6 = bounds7[11]
+    full = load("step5_full_train")
+    tr, va = with_seq50(full[full["window_id"] < 11], bounds7[:11],
+                        full[full["window_id"] == 11].reset_index(drop=True), f"b{b6}")
+    del full
+    tr = tr[tr["timestamp"] < b6].reset_index(drop=True)
+    cols = lf.model_columns(tr)
+    lf.log(f"day-6 validation: {len(tr):,} training rows, {len(va):,} validation rows, {len(cols)} features")
+    n_trees = int(round(lf.inner_holdout_trees(tr, bounds7[:11], cols) * ARGS.tree_mult))
+    pred, _ = lf.fit_seeds(tr, va, cols, n_trees)
+    auc = roc_auc_score(va["label"].to_numpy(), pred)
+    pd.DataFrame({"rowid": va["rowid"].astype(str), "predicted_probability": pred}).to_parquet(
+        f"data/validation/{NAME}_val6.parquet", index=False)
+    lf.log(f"DAY-6 VALIDATION {NAME}: AUC {auc:.6f} ({n_trees} trees, {(time.perf_counter() - t0) / 60:.1f} min)")
+
+
 if __name__ == "__main__":
-    submit() if ARGS.submit else validate()
+    validate6() if ARGS.val6 else submit() if ARGS.submit else validate()
