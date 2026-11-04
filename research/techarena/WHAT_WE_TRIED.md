@@ -559,3 +559,8 @@ Sanity: the three submission models look like their validation runs (mean probab
 MLP 0.0655 vs 0.0620 / 0.0623 / 0.0673; row Spearman 0.985–0.996). F vs C's final file Spearman 0.9973, vs E's
 0.9979. Batch 5's last run, context MLP 512 / dropout 0.2: 0.807411 (worse). This PC then builds the context MLP lr
 3e-4 submission (`--tag _s30_ctx_lr3 --submit`) only so that it is ready if a later combination passes the rule.
+
+Batch 6 (`--binary`, per-candidate logistic loss): alone 0.806841 (lr 1e-3, 6 epochs) and 0.806404 (lr 5e-4,
+9 epochs). Less correlated with the base MLP (0.986 vs ≈ 0.995 for the softmax variants) but adds nothing in the final
+blend: as an extra which-component +0.00002 / +0.00001, averaged with the base MLP +0.000002 / −0.000015. Batch 7:
+plain MLP at lr 3e-4 and context MLP at lr 2e-4.
