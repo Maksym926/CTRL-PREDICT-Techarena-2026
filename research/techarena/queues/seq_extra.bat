@@ -1,6 +1,6 @@
 @echo off
-rem Extra 50-click sequence models for the final blend only (4 Nov): 10 new seeds each of three variants (base, weight
-rem average 0.995, no user vector), fitted at the validation boundary (day 4) and at the evaluation boundary, so their
+rem Extra sequence models for the final blend only (4 Nov): 10 new seeds each of three variants (base, weight
+rem average 0.99, histories of 100 clicks), fitted at the validation boundary (day 4) and at the evaluation boundary, so their
 rem within-event shares can join final_blend.py --seq-extra without retraining the stack. Summary: logs\seq_exp.log
 cd /d D:\HuaweiTechArena\CTRL-PREDICT-Techarena-2026
 set PYTHONIOENCODING=utf-8
@@ -9,8 +9,8 @@ set SEQX=research\techarena\seq_model.py --data data\parquet --hist 50 --seeds 1
 set OUT=research\techarena\cache\seq
 echo [%date% %time%] seq extra start >> logs\seq_exp.log
 call :run base 100 seqx_base
-call :run ema 200 seqx_ema --ema 0.995
-call :run nouser 300 seqx_nouser --no-user
+call :run ema 200 seqx_ema --ema 0.99
+call :run h100 300 seqx_h100 --hist 100
 echo [%date% %time%] seq extra done >> logs\seq_exp.log
 exit /b 0
 
