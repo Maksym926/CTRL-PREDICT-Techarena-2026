@@ -52,6 +52,7 @@ Options beyond the original model:
               The inner AUC falls fast after epoch 1 (0.820 -> 0.816 -> 0.797), a sign of memorised per-user vectors.
   --hist-drop P  while training, hide each history click with probability P (as padding), so the model cannot lean
               on any single click and sees each event with a different history on every pass.
+  --item-lr-mult M  learning rate of the item vectors and biases = M x --lr (0 freezes them at the SVD start).
 """
 from __future__ import annotations
 
@@ -440,7 +441,13 @@ def fit(args, d: Events, n_users: int, n_items: int, b: int, epochs: int, device
     model = SeqModel(n_users, n_items, args.dim, args.layers, args.heads, args.dropout,
                      svd_init(d, b, n_users, n_items) if args.svd_init else None, skips=args.skips > 0,
                      n_hist=d.hist.shape[1], right_align=args.right_align, no_user=args.no_user).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
+    if args.item_lr_mult != 1.0:
+        emb = [model.item.weight, model.item_bias.weight]
+        rest = [q for q in model.parameters() if all(q is not e for e in emb)]
+        opt = torch.optim.AdamW([{"params": rest}, {"params": emb, "lr": args.lr * args.item_lr_mult}],
+                                lr=args.lr, weight_decay=args.wd)
+    else:
+        opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
     sched = None
     if args.sched == "cos":  # warmup, then cosine to 0 at the end of the last epoch
         total = epochs * -(-n_rows // args.batch)
@@ -586,6 +593,7 @@ def main(argv: list[str] | None = None, loaded: tuple | None = None) -> None:
                     help="write the seed-averaged inner-holdout predictions where the epoch search runs")
     ap.add_argument("--no-user", action="store_true", help="no free user vector: a user is only their history")
     ap.add_argument("--hist-drop", type=float, default=0.0, help="training: hide each history click with this probability")
+    ap.add_argument("--item-lr-mult", type=float, default=1.0, help="item vectors' learning rate = this x --lr (0 = frozen)")
     ap.add_argument("--fit-frac", type=float, default=1.0, help="<1 only for quick smoke tests")
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--log-every", type=int, default=0, help="print the running loss every N steps")

@@ -46,6 +46,9 @@ ap.add_argument("--sub-a")
 ap.add_argument("--sub-b")
 ap.add_argument("--seq50", default="stage3_h50_s30", help="folder under cache/seq with the 50-click features")
 ap.add_argument("--seq20", default="stage3_s5", help="folder under cache/seq with the 20-click features")
+ap.add_argument("--seq-extra", nargs="*", default=[],
+                help="more sequence-model folders under cache/seq (seq_b<val cutoff>.parquet and seq_full_eval.parquet):"
+                     " their within-event shares join the which part as extra components x1, x2, ...")
 ap.add_argument("--w-whether", type=float, default=0.1, help="binary's whether weight when it is not grid-searched")
 ap.add_argument("--whether-grid", action="store_true", help="pick the whether weights on validation (0.1 grid)")
 ap.add_argument("--val-c", help="optional third probability model (e.g. nn_step7.py), validation predictions")
@@ -53,7 +56,8 @@ ap.add_argument("--sub-c", help="the same model's submission file")
 ap.add_argument("--out")
 ARGS = ap.parse_args()
 SEQ = HERE / "cache" / "seq"
-KEYS = ["a", "b"] + (["c"] if ARGS.val_c else []) + ["s50", "s20"]
+EXTRA = [(f"x{i + 1}", folder) for i, folder in enumerate(ARGS.seq_extra)]
+KEYS = ["a", "b"] + (["c"] if ARGS.val_c else []) + ["s50", "s20"] + [k for k, _ in EXTRA]
 GRID = ARGS.whether_grid or bool(ARGS.val_c)
 STEPS = np.round(np.linspace(0, 1, 11), 1)
 WEIGHTS = ([(wa, wc) for wa in STEPS for wc in (STEPS if ARGS.val_c else [0.0]) if wa + wc <= 1.0001] if GRID
@@ -66,7 +70,7 @@ def frame(rows: pd.DataFrame, a_path: str, b_path: str, seq_name: str, c_path: s
     for name, path in (("a", a_path), ("b", b_path)) + ((("c", c_path),) if c_path else ()):
         p = pd.read_parquet(path) if path.endswith(".parquet") else pd.read_csv(path)
         d = d.merge(p.assign(rowid=p["rowid"].astype(str)).rename(columns={"predicted_probability": name}), on="rowid")
-    for name, folder in (("s50", ARGS.seq50), ("s20", ARGS.seq20)):
+    for name, folder in [("s50", ARGS.seq50), ("s20", ARGS.seq20)] + EXTRA:
         s = pd.read_parquet(SEQ / folder / f"seq_{seq_name}.parquet")
         d = d.merge(s[["rowid", "seq_prob"]].assign(rowid=s["rowid"].astype(str)).rename(columns={"seq_prob": name}),
                     on="rowid")
