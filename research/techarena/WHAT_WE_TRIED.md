@@ -604,3 +604,40 @@ _s30_ctx_lr2_o3`, ≈ 1.2 h), the average of those with `safe_v2_step7_nn_s30.cs
 validation average as `--val-c`), then `final_blend.py`. Reserve file already built:
 `submissions/safe_v2_step7_nn_s30_ctx_lr3.csv` (context lr 3e-4, 5 epochs on the full frames, inner 0.833148 vs the
 base MLP's 0.832625).
+
+## 16. 4 Nov day: the 50-click sequence model on the second PC's GPU
+The user asked (09:00) to keep searching, starting with the sequence model, using every machine. The second PC's
+GTX 1660 SUPER runs `seq_model.py` with CUDA (torch 2.14.1+cu126, venv Python 3.14.10): one pass over the 618k
+inner-fit events takes 33 s, a 3-seed inner-holdout screen ~3.5 min, so Kaggle is not needed for screening. Its
+GitHub deploy key was refused from 09:43 (`Permission denied (publickey)`), so changed files go over by scp
+(`git checkout -- <file>` there before the next pull). This PC has no NVIDIA GPU.
+
+**Why it stops after one epoch:** the evaluation-fit inner holdout falls from 0.8194 (epoch 1) to 0.8143 and 0.7983
+while the training loss drops 1.52 → 1.23 → 0.88: the model memorises its training events. Screens
+(`queues/seq_exp1-4.bat`; `--mode full --inner-only --hist 50 --seeds 3`, inner holdout of the evaluation fit, 29,940
+events; logs `logs\seq_exp.log` there):
+
+| Variant (new options in `seq_model.py`) | 1 seed, epoch 1 | 3-seed ensemble | vs base |
+|---|---|---|---|
+| base | 0.819401 | 0.821739 | — |
+| `--no-user` (no free user vector) | 0.818504 | 0.820863 | −0.0009 |
+| `--hist-drop 0.2` (hide history clicks while training) | 0.819401 | 0.821528 | −0.0002 |
+| both | 0.818717 | 0.820669 | −0.0011 |
+| `--emb-l2 1.0` (item vectors anchored to the SVD start) | 0.818644 | 0.820833 | −0.0009 |
+| `--dropout 0.3` | 0.819956 | 0.821780 | +0.00004 |
+| `--item-lr-mult 0` / 0.1 / 0.3 / **2** / 3 (item vectors' learning rate) | 0.8156 / 0.8161 / 0.8172 / 0.8197 / 0.8174 | 0.817558 / 0.818211 / 0.819342 / **0.822031** / 0.820726 | −0.0042 … **+0.0003** … −0.0010 |
+| `--dim 32` / `--dim 96` | 0.817570 / 0.818876 | 0.820780 / 0.821430 | −0.0010 / −0.0003 |
+| `--lr 5e-4` (2 epochs) / `--lr 2e-3` | 0.816619 / 0.818678 | 0.819699 / 0.821170 | −0.0020 / −0.0006 |
+| `--ema 0.99` / 0.995 / 0.998 (predict with a moving average of the weights) | **0.820495** / 0.818302 / 0.818450 | 0.821786 / 0.819853 / 0.820065 | +0.00005 / −0.0019 / −0.0017 |
+
+Nothing beats the base ensemble beyond seed noise: the per-user vectors are what memorises (without them the loss
+falls much more slowly) but also what the model needs; item vectors want to learn at least as fast as the rest; the
+moving average helps one model (+0.0011) but not an ensemble, because it removes the same noise as more seeds. The
+untrained SVD start already scores 0.8010, the trained ensemble 0.8217–0.8235: the model adds ~0.02 over plain
+matrix factorisation and is at its optimum for this design.
+
+**Extra sequence models in the final blend** (`final_blend.py --seq-extra <folders>`: their within-event shares join
+the which part; checked on F, held-out halves vs F's 0.807880 / 0.810090): 100-click histories (`seq_pair_c/h100`,
+5 seeds) +0.00001 / −0.00001; bigger model (`seq_pair_c/big`) +0.00002 / +0.00002. The blend already has what the
+sequence models know. (For reference: the sequence model alone scores 0.797 on validation, F 0.809, so using it
+alone would be far worse.)
