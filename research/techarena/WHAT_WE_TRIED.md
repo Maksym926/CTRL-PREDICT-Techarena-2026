@@ -677,3 +677,40 @@ Single event-level signals on validation (whether AUC): partner mass 0.669, MLP 
 no-click 0.640, user click rate 0.598, best-candidate share 0.54–0.55, gap 0.50. The components are calibrated for
 in-history and popular candidates, and their event masses already hold what the slate and the user's rate say.
 Running: second PC batch 9, `nn_step7.py --attn N` (self-attention over the event's 10 candidates).
+
+**4 Nov afternoon: NN mixes clear the rule (the first gain over F since the morning).** The second PC's GPU now runs
+the MLP stack too (`nn_step7.py --device cuda`; ~4 s per epoch vs ~40 s on CPU; most of a run is CPU-side loading).
+New option `--attn N` (self-attention over the event's 10 candidates). Alone on validation: attention lr 2e-4
+0.807753 (3 seeds) / 0.808037 (9 more seeds); attention lr 3e-4 0.807684; 2 layers 0.807672; with context 0.807214;
+512 wide 0.807500. More refit seeds matter for the MLPs: base 3 seeds 0.807615 → 9 seeds 0.807892 / 0.808088;
+context lr 2e-4 0.807954 → 9 seeds 0.808196 / 0.808257. In F's final blend (third model = probability average,
+held-out gain over F's 0.807880 / 0.810090):
+
+| Third model | Held-out gain |
+|---|---|
+| attention lr 2e-4 (3 seeds) | −0.00002 / +0.00010 |
+| base + attention lr 2e-4 | +0.00009 / +0.00013 |
+| base 3 + context lr 2e-4 6 + attention 3 | +0.00011 / +0.00016 |
+| base 21 seeds | +0.00005 / +0.00008 |
+| context lr 2e-4, 24 seeds | +0.00012 / +0.00014 |
+| base 21 + context 24 | +0.00010 / +0.00013 |
+| fallback (only models this PC can build): base 3 + context 3 + attention 3 | +0.00010 / +0.00016 |
+| context 24 + attention 3 | +0.00012 / +0.00018 |
+| base 21 + context 24 + attention 3 | +0.00012 / +0.00018 |
+| **context 24 (weight 2) + attention 3** | **+0.00013 / +0.00019** |
+
+Diversity of MLP types (plain / context / attention) and seed count both help. Package G = F's binary + partner +
+this MLP mix. Pre-declared choice: the mix with the best worse-half gain among {context 2 + attention 1, context 1 +
+attention 1, base + context + attention, context 2 + attention 1 + base 1} once the attention MLP has 12 validation
+seeds; G is built only if both halves gain ≥ +0.0001. The submission MLPs need the full frames on the second PC (sent
+by the user via Google Drive, `for_second_pc/`; `queues/second_pc_wait_files.sh` checks the 8 sizes, then
+`queues/lgb_exp13.bat` builds context × 24, attention × 12, base × 21 seeds on the GPU). Fallback: this PC's CPU builds
+the attention MLP (3 seeds, `--tag _s30_attn1_lr2 --submit`), with the reserve context lr 2e-4 and F's base MLP.
+
+Other afternoon checks, all no gain: the untuned partner as a 4th model (+0.00001 / −0.00001); same-period item
+frequency (an item shown more often than its popularity suggests) as a candidate term (+0.000005 / +0.000007); binary
+LightGBM with `extra_trees` alone 0.806818 (base 0.807295). "Evaluation set = clicked events only?" On validation,
+clicked events only: raw scores 0.8106–0.8125, within-event shares 0.8161–0.8165 (on all events shares lose 0.005);
+the other team's file keeps an event-level part (Spearman with our full score 0.969, with our shares only 0.950;
+between-event share of rank variance 0.074 vs our 0.071), so probably not; a probe file is ready
+(`submissions/safe_v2_step7_s30_final_f_share.csv`, F with shares only) if an upload is spent on it.
