@@ -5,6 +5,7 @@
 > It replaces `HANDOFF.md` (27 Oct) and `PROGRESS.md`. Results JSONs: `research/techarena/outputs/`; logs: `logs/`.
 
 **STATE 4 Nov 18:00 — WORK STOPPED by the user (read this first).**
+- **Uploaded 4 Nov 17:57: package G scored LB 0.824035 (new best; experiments.csv row 006).** Local 0.809212 → gap +0.0148; vs 005 +0.0024 LB for +0.0021 local (full carry-over).
 - **Final file: `submissions/safe_v2_step7_s30_final_g.csv` (package G)**: validation 0.809212, held-out 0.808004 /
   0.810281, checked valid (529,390 rows); expected LB ≈ 0.8234 (LB best so far 0.821624, 005). Deadline midnight Dublin
   time (= this PC's clock). The user had said they would only upload at 0.83; recommendation given: upload G anyway.
