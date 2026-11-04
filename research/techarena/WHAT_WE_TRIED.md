@@ -519,3 +519,23 @@ step 4's tuned parameters stay. New `nn_step7.py` options: `--context` (the cand
 h_i − mean_j h_j and max_j h_j, i.e. the rest of its event; default path unchanged, checked bit-identical) and `--wd`.
 Second PC batch 4 (`D:\HuaweiTechArena\lgb_exp4.bat`): context MLP at learning rates 1e-3 and 5e-4, MLP 512 /
 dropout 0.3 / 5e-4.
+
+**4 Nov 03:00–04:00: batch 4 and more blend checks** (F's blend with the base MLP: held-out 0.807880 / 0.810090):
+
+| Third model in the final blend | Alone | Held-out (A / B) | vs base MLP |
+|---|---|---|---|
+| base MLP (F) | 0.807615 | 0.807880 / 0.810090 | — |
+| context MLP, lr 1e-3 | 0.807668 | 0.807852 / 0.810078 | −0.00003 / −0.00001 |
+| context MLP, lr 5e-4 | **0.807872** | 0.807834 / 0.810054 | −0.00005 / −0.00004 |
+| base + context lr 5e-4 averaged | — | 0.807915 / 0.810113 | +0.00004 / +0.00002 |
+| base + context lr 1e-3 averaged | — | 0.807904 / 0.810113 | +0.00002 / +0.00002 |
+| MLP 512 / dropout 0.3 / lr 5e-4 | 0.807220 (7 epochs) | not tested | |
+
+Lesson: a better MLP alone is not a better blend partner. The context MLP learns more of what the LightGBM partner
+already has (its blend gain is lower), and any average of MLP variants adds only +0.00002–0.00004 held out (seed-level
+variance), so F keeps the base MLP. Also: fitting the blend parameters under the eval reweighting (weighted
+conditional logit + weighted AUC grid) changes held-out eval-reweighted AUC by −0.00001 / +0.00002 (nothing). The
+cell table shows the one gap validation cannot cover: 9.4% of evaluation events have a 3–7 day gap, none of the
+validation events (its period after the cutoff is shorter, gaps ≤ 72 h); the submission models' training frame has 4.0%
+such targets (`step5_full_train`, max 156 h; validation's training frame 0.5%). Batches 5–6 on the second PC: context MLP with new seeds / lr 3e-4 / 512 wide, then `--binary` (per-candidate
+logistic loss) at two learning rates, as a more different third model.
