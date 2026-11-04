@@ -662,3 +662,17 @@ mix.
 In F's final blend (held-out vs 0.807880 / 0.810090): 60-seed folder as the 50-click component 0.807879 / 0.810086
 (−0.000001 / −0.000004); the new 30 seeds as an extra component 0.807881 / 0.810087 (+0.000001 / −0.000003).
 **The sequence-model avenue is closed**: tuning, regularising, more seeds or more variants do not move F.
+
+**Blend-level checks, 4 Nov midday** (F's held-out 0.807880 / 0.810090; scratch `cand_terms.py`, `whether_lr.py`):
+
+| Test | Held-out change |
+|---|---|
+| Candidate terms in the which part's conditional logit: in history, log history count, recency position | −0.00004 / −0.00001 |
+| … popularity: log item clicks, log times shown before | +0.00001 / +0.000004 |
+| Event-level logistic "whether" model (fitted on one half) from the three event masses only | −0.00007 / −0.00010 |
+| … plus best-candidate share (MLP, 50-click), MLP entropy, the 50-click model's no-click probability, user click rate, past events, gap, history length | −0.00001 / −0.00006 (whether AUC 0.6699 / 0.6703 vs F's 0.6703 / 0.6697) |
+
+Single event-level signals on validation (whether AUC): partner mass 0.669, MLP 0.667, binary 0.662, 50-click
+no-click 0.640, user click rate 0.598, best-candidate share 0.54–0.55, gap 0.50. The components are calibrated for
+in-history and popular candidates, and their event masses already hold what the slate and the user's rate say.
+Running: second PC batch 9, `nn_step7.py --attn N` (self-attention over the event's 10 candidates).
