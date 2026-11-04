@@ -1,13 +1,15 @@
 # Tech Arena 2026, Phase 1: full handoff (everything we tried)
 
-> **New session: read this file first.** Last updated 3 Nov 2026, 22:50 (§0 overnight jobs, §13–§15: 3 Nov tests).
+> **New session: read this file first.** Last updated 4 Nov 2026, 05:20 (§15: the 3–4 Nov night).
 > It replaces `HANDOFF.md` (27 Oct) and `PROGRESS.md`. Results JSONs: `research/techarena/outputs/`; logs: `logs/`.
 
-**Update 3 Nov 23:55 — best file to upload now: `submissions/safe_v2_step7_s30_final_c.csv`** (package C's two models
-with the new final blend, `final_blend.py`: validation 0.808133, held-out estimate ≈ 0.80811, i.e. ≈ C + 0.00035;
-checked valid). Package D was validated and stopped (no gain, §15). The second PC runs LightGBM experiments on the
-validation frames (`D:\HuaweiTechArena\lgb_exp.bat`, then `lgb_exp2.bat` = Optuna re-tune; summary `logs\lgb_exp.log`
-there); this PC tests the softmax partner with tuned parameters.
+**Update 4 Nov 05:20 — best file to upload: `submissions/safe_v2_step7_s30_final_f.csv` (package F)**: C's binary
+LightGBM + the softmax partner with tuned parameters + the MLP stack (`nn_step7.py`), combined by `final_blend.py`.
+Validation 0.809056 in-sample, held-out halves 0.807880 / 0.810090 (≈ +0.0012 over package C's rank blend, 0.807766);
+eval-reweighted 0.812795 (C 0.811507); checked valid (529,390 rows). Expected LB ≈ 0.823 (005 scored 0.821624 at
+local 0.807134). Fallbacks, also valid: `safe_v2_step7_s30_final_e.csv` (E, no MLP: 0.808377) and
+`safe_v2_step7_s30_final_c.csv` (0.808133). Not uploaded yet: the user uploads; add the `experiments.csv` row (006)
+with the LB score. 0.83 is out of reach with these models (needs local ≈ 0.817).
 
 ## 0. Where we are (3 Nov, 21:50)
 
@@ -548,3 +550,12 @@ seed noise ≈ ±0.00004 and the context MLP is ≈ +0.0002 better alone than th
 +0.00004 / +0.00002. **Package E built 04:19**: `submissions/safe_v2_step7_s30_final_e.csv` (C's binary + tuned partner,
 final blend: validation 0.808377 in-sample, held-out 0.807136 / 0.809499, checked valid; partner submission 2602 trees
 × 3 seeds, 197 min).
+
+**Package F built 05:14** (`queues/queue_f.sh`): MLP submission `submissions/safe_v2_step7_nn_s30.csv` (inner holdout
+of the full frames chose 3 epochs, 0.832625; 3 seeds, 49 min), then `final_blend.py` →
+**`submissions/safe_v2_step7_s30_final_f.csv`**: validation 0.809056 (same fit as the validation run: beta binary 0.12,
+partner 0.36, MLP 0.43, 50-click 0.18, 20-click −0.11; whether partner 0.7 / MLP 0.3; scale 0.95), checked valid.
+Sanity: the three submission models look like their validation runs (mean probability binary 0.0627, partner 0.0628,
+MLP 0.0655 vs 0.0620 / 0.0623 / 0.0673; row Spearman 0.985–0.996). F vs C's final file Spearman 0.9973, vs E's
+0.9979. Batch 5's last run, context MLP 512 / dropout 0.2: 0.807411 (worse). This PC then builds the context MLP lr
+3e-4 submission (`--tag _s30_ctx_lr3 --submit`) only so that it is ready if a later combination passes the rule.
