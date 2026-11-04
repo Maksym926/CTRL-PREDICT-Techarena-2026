@@ -1,7 +1,33 @@
 # Tech Arena 2026, Phase 1: full handoff (everything we tried)
 
-> **New session: read this file first.** Last updated 4 Nov 2026, 05:20 (§15: the 3–4 Nov night).
+> **New session: read this file first.** Last updated 4 Nov 2026, 15:40 (§16: 4 Nov day). Deadline: 4 Nov midnight.
 > It replaces `HANDOFF.md` (27 Oct) and `PROGRESS.md`. Results JSONs: `research/techarena/outputs/`; logs: `logs/`.
+
+**STATE 4 Nov 15:40 (read this first).**
+- LB best still **0.821624** (005). **Nothing uploaded today yet**; the user uploads. Ready and checked:
+  `submissions/safe_v2_step7_s30_final_f.csv` (F, expected LB ≈ 0.823).
+- **Package G is being built** and should replace F: same binary + tuned partner, third model = (2 × context MLP lr 2e-4
+  with 24 seeds + 1 × attention MLP lr 2e-4 with 12 seeds) / 3. Validation: held-out gain over F **+0.000123 /
+  +0.000190** (rule +0.0001 on both halves: passes; §16). Validation side done:
+  `data/validation/nn_step7_s30_g_mix_val_c4.parquet`. Submission side: the second PC's GPU runs
+  `D:\HuaweiTechArena\lgb_exp13.bat` (started ~15:35, ~60–70 min; log there `logs\gpu_exp.log`, writes
+  `submissions\safe_v2_step7_nn_s30_ctx_lr2_s24.csv` and `..._attn1_lr2_s12.csv` there). This PC runs
+  `bash research/techarena/queues/build_g.sh` (log `logs/build_g.log`): waits for "batch 13 (GPU) done", fetches the two
+  files as float32 arrays (row order checked by md5), mixes 2:1 (`queues/weighted_avg.py`), runs `final_blend.py` →
+  **`submissions/safe_v2_step7_s30_final_g.csv`**, then the checker. Ends with "package G finished".
+- **If you are a new session:** `tail logs/build_g.log`. If it says "package G finished" and the check line says
+  valid, recommend uploading G (expected LB ≈ F + 0.0001–0.0002). If build_g.sh is not running and G does not exist:
+  check the second PC (`ssh -o BatchMode=yes yulia@100.103.24.101 "type D:\HuaweiTechArena\CTRL-PREDICT-Techarena-2026\logs\gpu_exp.log"`);
+  if batch 13 finished, re-run `bash research/techarena/queues/build_g.sh` (safe to re-run); if it died, re-run
+  `ssh ... "D:\HuaweiTechArena\lgb_exp13.bat"` (it needs nothing else: the full frames and all 14
+  `stage3_h50_s30` files are now on the second PC). If time runs out, upload F.
+- After the user uploads and reports the LB score: add `experiments.csv` row 006 (file, local, LB) and push.
+- Optional probe (one extra upload): `submissions/safe_v2_step7_s30_final_f_share.csv` = F with within-event shares
+  only; LB higher than F by ~0.004 would mean the evaluation set holds clicked events only (§16; probably not).
+- Main PC froze at 15:00 with the CPU MLP build + two blend scripts + a Google Drive upload: run one heavy job at a
+  time here. The second PC: GitHub pull refused (deploy key), copy changed files by scp; its GPU does the MLPs
+  (`--device cuda`). The Google Drive copy of the frames is also in
+  `D:\HuaweiTechArena\CTRL-PREDICT-Techarena-2026\for_second_pc-20261104T151107Z-1-002\` there (can be deleted).
 
 **Update 4 Nov 05:20 — best file to upload: `submissions/safe_v2_step7_s30_final_f.csv` (package F)**: C's binary
 LightGBM + the softmax partner with tuned parameters + the MLP stack (`nn_step7.py`), combined by `final_blend.py`.
@@ -714,3 +740,14 @@ clicked events only: raw scores 0.8106–0.8125, within-event shares 0.8161–0.
 the other team's file keeps an event-level part (Spearman with our full score 0.969, with our shares only 0.950;
 between-event share of rank variance 0.074 vs our 0.071), so probably not; a probe file is ready
 (`submissions/safe_v2_step7_s30_final_f_share.csv`, F with shares only) if an upload is spent on it.
+
+**Package G choice (4 Nov 14:42, pre-declared rule: best worse-half gain, ≥ +0.0001 on both halves):** with the
+attention MLP at 12 validation seeds (3 + 9 more, `_attn1_lr2_o3s9`): context 24 × 2 + attention 12 **+0.000123 /
++0.000190** (chosen); context 24 + attention 12 +0.000111 / +0.000199; base 21 + context 24 + attention 12 +0.000115 /
++0.000181; context 24 × 2 + attention 12 + base 21 +0.000121 / +0.000177. Validation mix file:
+`data/validation/nn_step7_s30_g_mix_val_c4.parquet` (= `queues/weighted_avg.py` of
+`nn_step7_s30_ctx_lr2_many_val_c4.parquet`:2 and `nn_step7_s30_attn12_val_c4.parquet`:1; the "many"/"attn12" files are
+seed-weighted averages of the second PC's GPU runs, fetched as float32 arrays `nn_base18.npy`, `nn_ctx18.npy`,
+`nn_attn9.npy` in the validation row order, md5 4896fbe6…). Submission: `queues/lgb_exp13.bat` (GPU) then
+`queues/build_g.sh`. The 15:00 freeze stopped this PC's CPU fallback build of the attention MLP (`--tag
+_s30_attn1_lr2 --submit`); not needed while the GPU path works.
