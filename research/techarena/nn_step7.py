@@ -33,6 +33,7 @@ ap.add_argument("--submit", action="store_true")
 ap.add_argument("--tag", default="", help="suffix for the output names")
 ap.add_argument("--swap", nargs="*", default=[], help="prefix=folder: as safe_v2_step7.py --swap")
 ap.add_argument("--seeds", type=int, default=3)
+ap.add_argument("--seed-offset", type=int, default=0, help="refit seeds k + offset (the inner holdout fit is unchanged)")
 ap.add_argument("--max-epochs", type=int, default=12)
 ap.add_argument("--hidden", type=int, default=256)
 ap.add_argument("--dropout", type=float, default=0.1)
@@ -201,7 +202,7 @@ def run(tr: pd.DataFrame, target: pd.DataFrame, bounds: list[int]) -> tuple[np.n
     del raw
     preds = []
     for k in range(A.seeds):
-        model, _ = train(X, y_all, epochs, lf.FULL_SEEDS[0] + 101 * k)
+        model, _ = train(X, y_all, epochs, lf.FULL_SEEDS[0] + 101 * (k + A.seed_offset))
         preds.append(predict(model, Xt))
         lf.log(f"  NN seed {k} done")
     return np.mean(preds, axis=0), {"epochs": epochs, "inner_curve": curve, "features": len(cols)}
