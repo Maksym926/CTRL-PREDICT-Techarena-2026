@@ -35,6 +35,8 @@ ap.add_argument("--swap", nargs="*", default=[], help="prefix=folder: the folder
                                                       "<boundary>.parquet) replaces the <prefix>_prob/_noclick/_rank columns")
 ap.add_argument("--params", default="", help="JSON with best_params (e.g. outputs/optuna_step4.json) on top of the "
                                              "default LightGBM parameters the partner has always used")
+ap.add_argument("--max-trees", type=int, default=0, help="cap of the inner-holdout tree search (default 2500); with "
+                                                         "the tuned parameters validation already chose 1928")
 A = ap.parse_args()
 sys.argv = [sys.argv[0], "--threads", str(A.threads)]  # softmax_objective parses the command line on import
 HERE = Path(__file__).resolve().parent
@@ -45,6 +47,8 @@ from src.validation import make_split  # noqa: E402
 lf = so.lf
 if A.params:  # so.fit and submit() both read lf.LGB_PARAMS
     lf.LGB_PARAMS.update(json.loads(Path(A.params).read_text())["best_params"])
+if A.max_trees:
+    lf.MAX_TREES = A.max_trees
 LAB = HERE / "cache" / "lab"
 SEQ_DIR = HERE / "cache" / "seq" / A.seq
 NEW = ["seq50_prob", "seq50_noclick", "seq50_rank"]
