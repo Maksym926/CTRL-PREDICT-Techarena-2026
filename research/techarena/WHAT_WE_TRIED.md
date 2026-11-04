@@ -564,3 +564,22 @@ Batch 6 (`--binary`, per-candidate logistic loss): alone 0.806841 (lr 1e-3, 6 ep
 9 epochs). Less correlated with the base MLP (0.986 vs ≈ 0.995 for the softmax variants) but adds nothing in the final
 blend: as an extra which-component +0.00002 / +0.00001, averaged with the base MLP +0.000002 / −0.000015. Batch 7:
 plain MLP at lr 3e-4 and context MLP at lr 2e-4.
+
+Batch 7 (06:00): plain MLP lr 3e-4 0.807684 alone (8 epochs), context MLP lr 2e-4 **0.807954** alone (8 epochs). All
+options as the final blend's third model, scored in one pass (scratch `multi_c_blend.py`, same protocol as
+`final_blend.py`; held-out gain over F's base MLP, halves A / B):
+
+| Third model (probabilities averaged) | Held-out gain |
+|---|---|
+| plain MLP lr 3e-4 | −0.00001 / +0.00006 |
+| context MLP lr 2e-4 | +0.00003 / +0.00011 |
+| base + plain lr 3e-4 | +0.00003 / +0.00005 |
+| base + context lr 3e-4 | +0.00005 / +0.00006 |
+| **base + context lr 2e-4** | **+0.00006 / +0.00010** |
+| base + plain lr 3e-4 + context lr 3e-4 + context lr 2e-4 | +0.00006 / +0.00010 |
+| all nine softmax MLPs | +0.00004 / +0.00006 |
+
+The context MLP's blend value rises as its learning rate falls (1e-3: −0.00003 / −0.00001; 5e-4: −0.00005 / −0.00004;
+3e-4: +0.00002 / +0.00007; 2e-4: +0.00003 / +0.00011), but nothing clears +0.0001 on both halves yet. Batch 8: context
+lr 1e-4, and lr 2e-4 with refit seeds 3–5 (new `--patience`: early stop of the epoch search). This PC
+(`queues/queue_g.sh`) builds the context lr 3e-4 and lr 2e-4 submissions as reserves.
