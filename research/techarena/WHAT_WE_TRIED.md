@@ -1,37 +1,21 @@
 # Tech Arena 2026, Phase 1: full handoff (everything we tried)
 
-> **New session: read this file first.** Last updated 4 Nov 2026, 16:00 (§17: 4 Nov late afternoon). Deadline: 4 Nov
+> **New session: read this file first.** Last updated 4 Nov 2026, 18:00 (§17: 4 Nov late afternoon; work stopped). Deadline: 4 Nov
 > midnight, Dublin time (this PC's clock).
 > It replaces `HANDOFF.md` (27 Oct) and `PROGRESS.md`. Results JSONs: `research/techarena/outputs/`; logs: `logs/`.
 
-**STATE 4 Nov 16:00 (read this first).**
-- Deadline: **midnight Dublin time** (= this PC's clock, UTC+0; the second PC's clock is UTC+2). LB best still
-  **0.821624** (005). The user (4 Nov 15:30): **no upload until something reaches LB 0.83**; keep searching, try
-  completely different approaches, ask them to send files to the GPU PC (Google Drive) when needed.
-- **Package G built and checked (15:50): `submissions/safe_v2_step7_s30_final_g.csv`** = best file. Held-out
-  0.808004 / 0.810281 (F 0.807880 / 0.810090), validation 0.809212 (F 0.809056), valid (529,390 rows), Spearman with F
-  0.99929; expected LB ≈ 0.8232. (F = previous best, `..._final_f.csv`.) If 0.83 is not reached, still recommend
-  uploading G before midnight as insurance. After any upload: `experiments.csv` row 006 and push.
-- Tests 4 Nov afternoon (§17): **the evaluation set is NOT clicked-events-only** (coverage of never-clicking users and
-  delay-vs-click-rate match "first event after the cutoff"; the `final_f_share.csv` probe would lose ~0.005, dropped).
-  Items shown-but-not-clicked to the same user earlier: click rate 0.055 vs 0.057 (no "future clicks as fillers" leak;
-  `shown_before` features exist anyway). Within-event order by rowid / item_id: uniform.
-- Mult-VAE, PLE-encoded MLPs, gap/cold-item/history-filler probes: no gain (§17).
-- **Lead 16:40: `nn_step7.py --window-day`** (the row's window boundary in days as an input; targets get their own
-  boundary, so at day 7 the stack behaves like its latest, most data-rich window): context MLP lr 2e-4, 3 seeds
-  0.808138 alone vs 0.807954 plain (+0.00018); `--window-weight 1` −0.00009, both +0.00014. Running: second PC
-  `lgb_exp17.bat` (validation: wday context seeds 3–23 + wday attention ×12) → scratch `h2_choice.py` (G vs G-wday
-  mixes, rule ≥ +0.0001 both halves) and `lgb_exp18.bat` (the two wday MLP submissions, fetched to `submissions/`);
-  then the partner with `softmax_step7.py --window-day --tag _s30_opt4_wday` (validation, second PC CPU). If the
-  MLP mix passes: `weighted_avg.py` (2 × ctx_lr2_wday_s24 + attn1_lr2_wday_s12) → `final_blend.py --val-c/--sub-c` →
-  `submissions/safe_v2_step7_s30_final_h.csv`.
-- **Running 16:25 (day-6 validation, §17):** is G's blend (weights fitted at day 4) still right at a later boundary?
-  New `--val6` mode in `safe_v2_step7.py`, `softmax_step7.py`, `nn_step7.py`: train on the submission frames' windows
-  0.5–5.5 (targets before day 6), score window 6.0 → `data/validation/*_val6.parquet`. Jobs: binary on the second
-  PC's CPU (log there `logs\lgb_val6.log`), partner here (`logs/softmax_step7_s30_opt4_val6.log`, ~70 min), MLPs
-  (context ×24, attention ×12) on the second PC's GPU = `D:\HuaweiTechArena\lgb_exp16.bat` after batch 15
-  (`--window-day` / `--window-weight` MLP test). Then the scratch `blend6.py` (copy in this session's scratchpad):
-  rule = day-6-fitted weights ≥ +0.0002 over G's on both day-6 halves → refit the blend on day 4 + day 6 pooled.
+**STATE 4 Nov 18:00 — WORK STOPPED by the user (read this first).**
+- **Final file: `submissions/safe_v2_step7_s30_final_g.csv` (package G)**: validation 0.809212, held-out 0.808004 /
+  0.810281, checked valid (529,390 rows); expected LB ≈ 0.8234 (LB best so far 0.821624, 005). Deadline midnight Dublin
+  time (= this PC's clock). The user had said they would only upload at 0.83; recommendation given: upload G anyway.
+  After any upload: `experiments.csv` row 006 (file, local 0.809212, LB) and push.
+- Everything tried after G (16:00–17:55, §17) gave no gain: Mult-VAE, PLE / window-day / pairwise-AUC-loss MLPs,
+  partner `--window-day`, and every leak/structure probe (clicked-only evaluation, row order, timestamps, cold items,
+  long gaps, history fillers, deep-history candidates). Package H (window-day MLPs) was not built (below the rule).
+- Left running when stopped: second PC GPU batch 16 (`lgb_exp16.bat`, day-6 validation of G's two MLP types, writes
+  `data\validation\nn_step7_s30_*_val6.parquet` there, ~18:20). The day-6 blend-weight check (scratch `blend6.py`,
+  needs those two files + the binary/partner `_val6` files already in `data/validation/`) was not run.
+  `submissions/safe_v2_step7_nn_s30_attn1_lr2_wday_s12.csv.partial` is an interrupted download (unused).
 - Main PC froze at 15:00 with the CPU MLP build + two blend scripts + a Google Drive upload: run one heavy job at a
   time here. The second PC: GitHub pull refused (deploy key), copy changed files by scp; its GPU does the MLPs
   (`--device cuda`). The Google Drive copy of the frames is also in
