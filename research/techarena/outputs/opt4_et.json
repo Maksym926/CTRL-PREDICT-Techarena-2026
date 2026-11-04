@@ -1,0 +1,13 @@
+{
+ "best_params": {
+  "num_leaves": 20,
+  "min_child_samples": 682,
+  "colsample_bytree": 0.37821157397170885,
+  "subsample": 0.8421390313949151,
+  "reg_lambda": 53.20835602125282,
+  "reg_alpha": 1.3567060438716652,
+  "min_split_gain": 0.8504889653507712,
+  "extra_trees": true
+ },
+ "note": "optuna_step4 + {'extra_trees': True} (4 Nov diversity test)"
+}

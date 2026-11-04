@@ -50,6 +50,7 @@ ap.add_argument("--context", action="store_true",
 ap.add_argument("--binary", action="store_true",
                 help="per-candidate logistic loss and sigmoid outputs instead of the event softmax")
 ap.add_argument("--attn", type=int, default=0, help="self-attention layers over the 10 candidates (0 = none)")
+ap.add_argument("--device", default="cpu", help="cpu or cuda (batches are moved to the device one at a time)")
 ap.add_argument("--threads", type=int, default=8)
 A = ap.parse_args()
 sys.argv = sys.argv[:1]
@@ -59,6 +60,7 @@ import leakfree_safe_v2 as lf  # noqa: E402  (chdir to the repo root)
 from src.validation import make_split  # noqa: E402
 
 torch.set_num_threads(A.threads)
+DEV = torch.device(A.device)
 LAB = HERE / "cache" / "lab"
 SEQ_DIR = HERE / "cache" / "seq" / A.seq
 NEW = ["seq50_prob", "seq50_noclick", "seq50_rank"]
@@ -163,8 +165,8 @@ def predict(model: EventMLP, X: np.ndarray) -> np.ndarray:
     out = []
     with torch.no_grad():
         for i in range(0, len(X), 8192):
-            logits = model(torch.from_numpy(X[i:i + 8192]))
-            out.append((torch.sigmoid(logits[:, 1:]) if A.binary else torch.softmax(logits, 1)[:, 1:]).numpy())
+            logits = model(torch.from_numpy(X[i:i + 8192]).to(DEV))
+            out.append((torch.sigmoid(logits[:, 1:]) if A.binary else torch.softmax(logits, 1)[:, 1:]).cpu().numpy())
     return np.concatenate(out).ravel()
 
 
@@ -172,7 +174,7 @@ def train(X: np.ndarray, y: np.ndarray, epochs: int, seed: int, hold=None):
     """X: events x 10 x features. Returns the model and the per-epoch holdout AUC curve (if hold)."""
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
-    model = EventMLP(X.shape[2], A.hidden, A.dropout, A.context, A.attn)
+    model = EventMLP(X.shape[2], A.hidden, A.dropout, A.context, A.attn).to(DEV)
     opt = torch.optim.AdamW(model.parameters(), lr=A.lr, weight_decay=A.wd)
     Xt, yt = torch.from_numpy(X), torch.from_numpy(y)
     curve = []
@@ -181,11 +183,12 @@ def train(X: np.ndarray, y: np.ndarray, epochs: int, seed: int, hold=None):
         order = rng.permutation(len(X))
         for i in range(0, len(order), A.batch):
             idx = torch.from_numpy(order[i:i + A.batch])
+            xb, yb = Xt[idx].to(DEV, non_blocking=True), yt[idx].to(DEV)
             if A.binary:  # candidate i is clicked iff the event label is i + 1
-                target = (yt[idx][:, None] == torch.arange(1, 11)).float()
-                loss = nn.functional.binary_cross_entropy_with_logits(model(Xt[idx])[:, 1:], target)
+                target = (yb[:, None] == torch.arange(1, 11, device=DEV)).float()
+                loss = nn.functional.binary_cross_entropy_with_logits(model(xb)[:, 1:], target)
             else:
-                loss = nn.functional.cross_entropy(model(Xt[idx]), yt[idx])
+                loss = nn.functional.cross_entropy(model(xb), yb)
             opt.zero_grad()
             loss.backward()
             opt.step()
