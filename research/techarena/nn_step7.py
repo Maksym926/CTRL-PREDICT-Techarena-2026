@@ -36,6 +36,8 @@ ap.add_argument("--swap", nargs="*", default=[], help="prefix=folder: as safe_v2
 ap.add_argument("--seeds", type=int, default=3)
 ap.add_argument("--seed-offset", type=int, default=0, help="refit seeds k + offset (the inner holdout fit is unchanged)")
 ap.add_argument("--max-epochs", type=int, default=12)
+ap.add_argument("--patience", type=int, default=0,
+                help="stop the inner-holdout pass after this many epochs without a new best (0 = run all)")
 ap.add_argument("--hidden", type=int, default=256)
 ap.add_argument("--dropout", type=float, default=0.1)
 ap.add_argument("--lr", type=float, default=1e-3)
@@ -183,6 +185,8 @@ def train(X: np.ndarray, y: np.ndarray, epochs: int, seed: int, hold=None):
             p = predict(model, hold[0])
             curve.append(float(roc_auc_score(hold[1], p)))
             lf.log(f"    epoch {ep + 1}: inner-holdout AUC {curve[-1]:.6f}")
+            if A.patience and ep - int(np.argmax(curve)) >= A.patience:
+                break
     return model, curve
 
 
