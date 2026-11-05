@@ -227,3 +227,10 @@ submissions/*
 .venv/
 logs/
 .idea/
+
+# Research pipeline data and generated artifacts
+research/techarena/cache/
+research/techarena/outputs/
+research/techarena/data/
+research/techarena/.venv/
+for_second_pc/

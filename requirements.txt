@@ -6,3 +6,4 @@ matplotlib
 jupyter
 polars
 pyarrow
+torch
